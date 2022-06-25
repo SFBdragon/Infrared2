@@ -1,0 +1,208 @@
+
+pub fn knights_attack_mask(knights: u64) -> u64 {
+    if knights == 0 { return 0; }
+
+    let mut msk = 0;
+    msk |= (knights & 0x0000FEFEFEFEFEFE) << 0o17; // uul
+    msk |= (knights & 0x00007F7F7F7F7F7F) << 0o21; // uur
+    msk |= (knights & 0x00FCFCFCFCFCFCFC) << 0o6 ; // ull
+    msk |= (knights & 0x003F3F3F3F3F3F3F) << 0o12; // urr
+    msk |= (knights & 0xFEFEFEFEFEFE0000) >> 0o21; // ddl
+    msk |= (knights & 0x7F7F7F7F7F7F0000) >> 0o17; // ddr
+    msk |= (knights & 0xFCFCFCFCFCFCFC00) >> 0o12; // dll
+    msk |= (knights & 0x3F3F3F3F3F3F3F00) >> 0o6 ; // drr
+    msk
+}
+
+
+//let mut dat_file = std::fs::File::create(std::path::Path::new("src/board/rook.dat")).unwrap();
+{
+let mut total = 0u64;
+for i in 0..64 {
+    let rank: usize = i % 8;
+    let file: usize = i / 8;
+
+    let row = 0x7e;
+    let col = 0x0001010101010100;
+    
+    let mut msk: u64 = 0;
+    msk |= row << file * 8;
+    msk |= col << rank;
+    msk &= !(1 << i);
+
+    print!("{:#x}, ", total);
+    total += 1 << msk.count_ones();
+
+    for i in 0..(1 << msk.count_ones()) {
+        let all = unsafe { std::arch::x86_64::_pdep_u64(i as u64, msk) };
+        let mut mov_msk = 0u64;
+
+        for j in 1..=rank {
+            mov_msk |= 1 << (rank - j + file * 8);
+            if 1 << (rank - j + file * 8) & all != 0 {
+                break;
+            }
+        }
+        for j in 1..=(7-rank) {
+            mov_msk |= 1 << (rank + j + file * 8);
+            if 1 << (rank + j + file * 8) & all != 0 {
+                break;
+            }
+        }
+        for j in 1..=file {
+            mov_msk |= 1 << (rank + (file - j) * 8);
+            if 1 << (rank + (file - j) * 8) & all != 0 {
+                break;
+            }
+        }
+        for j in 1..=(7-file) {
+            mov_msk |= 1 << (rank + (file + j) * 8);
+            if 1 << (rank + (file + j) * 8) & all != 0 {
+                break;
+            }
+        }
+
+        println!("{:x}  ", mov_msk);
+        
+        //dat_file.write(&mov_msk.to_le_bytes()).unwrap();
+    }
+
+    /* let row = 0x7e;
+    let col = 0x0001010101010100;
+
+    let mut msk: u64 = 0;
+    msk |= row << file * 8;
+    msk |= col << rank;
+
+    print!("{:#x}, ", msk & !(1 << i)); */
+}
+
+
+/* let mut bishop_dat_file = std::fs::File::create(std::path::Path::new("src/board/bishop.dat")).unwrap();
+
+let mut total = 0u64;
+for i in 0..64 {
+let rank: usize = i % 8;
+let file: usize = i / 8;
+
+let mut msk = 0u64;
+for j in 1..std::cmp::min(rank, file) {
+msk |= 1 << (rank - j + (file - j) * 8);
+}
+for j in 1..std::cmp::min(7-rank, 7-file) {
+msk |= 1 << (rank + j + (file + j) * 8);
+}
+for j in 1..std::cmp::min(7-rank, file) {
+msk |= 1 << (rank + j + (file - j) * 8);
+}
+for j in 1..std::cmp::min(rank, 7-file) {
+msk |= 1 << (rank - j + (file + j) * 8);
+}
+
+print!("{:#x}, ", total);
+total += 1 << msk.count_ones();
+for i in 0..(1 << msk.count_ones()) {
+let all = unsafe { std::arch::x86_64::_pdep_u64(i as u64, msk) };
+let mut mov_msk = 0u64;
+
+for j in 1..=std::cmp::min(rank, file) {
+    mov_msk |= 1 << (rank - j + (file - j) * 8);
+    if 1 << (rank - j + (file - j) * 8) & all != 0 {
+        break;
+    }
+}
+for j in 1..=std::cmp::min(7-rank, 7-file) {
+    mov_msk |= 1 << (rank + j + (file + j) * 8);
+    if 1 << (rank + j + (file + j) * 8) & all != 0 {
+        break;
+    }
+}
+for j in 1..=std::cmp::min(7-rank, file) {
+    mov_msk |= 1 << (rank + j + (file - j) * 8);
+    if 1 << (rank + j + (file - j) * 8) & all != 0 {
+        break;
+    }
+}
+for j in 1..=std::cmp::min(rank, 7-file) {
+    mov_msk |= 1 << (rank - j + (file + j) * 8);
+    if 1 << (rank - j + (file + j) * 8) & all != 0 {
+        break;
+    }
+}
+
+bishop_dat_file.write(&mov_msk.to_le_bytes()).unwrap();
+
+/* let row = 0x7e;
+let col = 0x0001010101010100;
+
+let mut msk: u64 = 0;
+msk |= row << file * 8;
+msk |= col << rank;
+
+print!("{:#x}, ", msk & !(1 << i)); */
+} */
+
+pub fn unmake(&mut self, from: u64, to: u64, piece: Piece, data: UnmakeData) {
+        self.move_count -= (self.colour + 1 >> 1) as usize;
+        self.colour = -self.colour;
+        swap(&mut self.actv, &mut self.idle);
+        self.pawns = self.pawns.swap_bytes();
+        self.knights = self.knights.swap_bytes();
+        self.bishops = self.bishops.swap_bytes();
+        self.rooks = self.rooks.swap_bytes();
+        self.queens = self.queens.swap_bytes();
+        self.kings = self.kings.swap_bytes();
+        self.actv = self.actv.swap_bytes();
+        self.idle = self.idle.swap_bytes();
+        
+
+        
+        match piece {
+            Piece::Pawn =>   self.pawns = self.pawns     & !to | from,
+            Piece::Knight => self.knights = self.knights & !to | from,
+            Piece::Bishop => self.bishops = self.bishops & !to | from,
+            Piece::Rook =>   self.rooks = self.rooks     & !to | from,
+            Piece::Queen =>  self.queens = self.queens   & !to | from,
+            Piece::King => {
+                self.kings = self.kings & !to | from;
+                if from == to >> 2 { // kingside castle!
+                    self.rooks = self.rooks & !0x20 | 0x80;
+                } else if from == to << 2 { // queenside castle!
+                    self.rooks = self.rooks & !0x8 | 0x1;
+                }
+            }
+        }
+
+        self.actv = self.actv & !to | from;
+
+        match data.capture {
+            Capture::None => (),
+            Capture::Pawn => {
+                self.idle |= to;
+                self.pawns |= to;
+            },
+            Capture::Knight => {
+                self.idle |= to;
+                self.knights |= to;
+            },
+            Capture::Bishop => {
+                self.idle |= to;
+                self.bishops |= to;
+            },
+            Capture::Rook => {
+                self.idle |= to;
+                self.rooks |= to;
+            },
+            Capture::Queen => {
+                self.idle |= to;
+                self.queens |= to;
+            },
+            Capture::EnPassant => {
+                self.idle |= to >> 8;
+                self.pawns |= to >> 8;
+            },
+        }
+
+        self.ninc = data.ninc;
+        self.all = self.actv | self.idle;
+    }

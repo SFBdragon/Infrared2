@@ -1,0 +1,217 @@
+//! Piece move/defend masks and generation.
+
+use std::arch::x86_64;
+
+use crate::for_sq;
+
+#[inline]
+pub fn get_knight_fend(sq: usize) -> u64 {
+    KNIGHT_FEND_MASKS[sq]
+}
+#[inline]
+pub fn get_rook_fend(sq: usize, all: u64) -> u64 {
+    let mask = ROOK_SHADOW_MASKS[sq];
+    let index = unsafe { x86_64::_pext_u64(all, mask) } as usize;
+    ROOK_FEND_MASKS[ROOK_TABLE_OFFSETS[sq] + index]
+}
+#[inline]
+pub fn get_bishop_fend(sq: usize, all: u64) -> u64 {
+    let mask = BISHOP_SHADOW_MASKS[sq];
+    let index = unsafe { x86_64::_pext_u64(all, mask) } as usize;
+    BISHOP_FEND_MASKS[BISHOP_TABLE_OFFSETS[sq] + index]
+}
+#[inline]
+pub fn get_queen_fend(sq: usize, all: u64) -> u64 {
+    get_rook_fend(sq, all) | get_bishop_fend(sq, all)
+}
+#[inline]
+pub fn get_king_fend(sq: usize) -> u64 {
+    KING_FEND_MASKS[sq]
+}
+
+
+#[inline]
+pub fn get_pawns_fend_actv(pawns: u64) -> u64 {
+    let mut fend = 0;
+    fend |= (pawns & !0x0101010101010101) << 0o7 ; // forward-left
+    fend |= (pawns & !0x8080808080808080) << 0o11; // forward-right
+    fend
+}
+#[inline]
+pub fn get_pawns_fend_idle(pawns: u64) -> u64 {
+    let mut fend = 0;
+    fend |= (pawns & !0x0101010101010101) >> 0o11; // backward-left
+    fend |= (pawns & !0x8080808080808080) >> 0o7 ; // backward-right
+    fend
+}
+
+#[inline]
+pub fn get_knights_fend(knights: u64) -> u64 {
+    // This is faster than the non-looping method for up to three knights.
+    // Given the most common use case is for a single colour, where more
+    // than two knights is exceedingly rare, the loop is preferred over 
+    // the non-looping [mask-and-shift 8 times] approach.
+    let mut fend = 0;
+    for_sq!(sq in knights => {
+        fend |= get_knight_fend(sq);
+    });
+    fend
+}
+#[inline]
+pub fn get_bishops_fend(bishops: u64, all: u64) -> u64 {
+    let mut fend = 0;
+    for_sq!(sq in bishops => {
+        fend |= get_bishop_fend(sq, all);
+    });
+    fend
+}
+#[inline]
+pub fn get_rooks_fend(rooks: u64, all: u64) -> u64 {
+    let mut fend = 0;
+    for_sq!(sq in rooks => {
+        fend |= get_rook_fend(sq, all);
+    });
+    fend
+}
+#[inline]
+pub fn get_queens_fend(queens: u64, all: u64) -> u64 {
+    let mut fend = 0;
+    for_sq!(sq in queens => {
+        fend |= get_queen_fend(sq, all);
+    });
+    fend
+}
+
+
+pub static KING_FEND_MASKS: [u64; 64] = [
+    0x302, 0x705, 0xe0a, 0x1c14, 0x3828, 0x7050, 0xe0a0, 0xc040, 0x30203, 0x70507, 
+    0xe0a0e, 0x1c141c, 0x382838, 0x705070, 0xe0a0e0, 0xc040c0, 0x3020300, 0x7050700, 
+    0xe0a0e00, 0x1c141c00, 0x38283800, 0x70507000, 0xe0a0e000, 0xc040c000, 0x302030000, 
+    0x705070000, 0xe0a0e0000, 0x1c141c0000, 0x3828380000, 0x7050700000, 0xe0a0e00000, 
+    0xc040c00000, 0x30203000000, 0x70507000000, 0xe0a0e000000, 0x1c141c000000, 
+    0x382838000000, 0x705070000000, 0xe0a0e0000000, 0xc040c0000000, 0x3020300000000, 
+    0x7050700000000, 0xe0a0e00000000, 0x1c141c00000000, 0x38283800000000, 
+    0x70507000000000, 0xe0a0e000000000, 0xc040c000000000, 0x302030000000000, 
+    0x705070000000000, 0xe0a0e0000000000, 0x1c141c0000000000, 0x3828380000000000, 
+    0x7050700000000000, 0xe0a0e00000000000, 0xc040c00000000000, 0x203000000000000, 
+    0x507000000000000, 0xa0e000000000000, 0x141c000000000000, 0x2838000000000000, 
+    0x5070000000000000, 0xa0e0000000000000, 0x40c0000000000000, 
+];
+
+pub static KNIGHT_FEND_MASKS: [u64; 64] = [0x20400, 0x50800, 0xa1100, 0x142200, 
+    0x284400, 0x508800, 0xa01000, 0x402000, 0x2040004, 0x5080008, 0xa110011, 
+    0x14220022, 0x28440044, 0x50880088, 0xa0100010, 0x40200020, 0x204000402, 
+    0x508000805, 0xa1100110a, 0x1422002214, 0x2844004428, 0x5088008850, 
+    0xa0100010a0, 0x4020002040, 0x20400040200, 0x50800080500, 0xa1100110a00, 
+    0x142200221400, 0x284400442800, 0x508800885000, 0xa0100010a000, 
+    0x402000204000, 0x2040004020000, 0x5080008050000, 0xa1100110a0000, 
+    0x14220022140000, 0x28440044280000, 0x50880088500000, 0xa0100010a00000, 
+    0x40200020400000, 0x204000402000000, 0x508000805000000, 0xa1100110a000000, 
+    0x1422002214000000, 0x2844004428000000, 0x5088008850000000, 0xa0100010a0000000, 
+    0x4020002040000000, 0x400040200000000, 0x800080500000000, 0x1100110a00000000, 
+    0x2200221400000000, 0x4400442800000000, 0x8800885000000000, 0x100010a000000000, 
+    0x2000204000000000, 0x4020000000000, 0x8050000000000, 0x110a0000000000, 
+    0x22140000000000, 0x44280000000000, 0x88500000000000, 0x10a00000000000, 0x20400000000000, 
+];
+
+pub static ROOK_SHADOW_MASKS: [u64; 64] = [0x101010101017e, 0x202020202027c, 
+    0x404040404047a, 0x8080808080876, 0x1010101010106e, 0x2020202020205e, 
+    0x4040404040403e, 0x8080808080807e, 0x1010101017e00, 0x2020202027c00, 
+    0x4040404047a00, 0x8080808087600, 0x10101010106e00, 0x20202020205e00, 
+    0x40404040403e00, 0x80808080807e00, 0x10101017e0100, 0x20202027c0200, 
+    0x40404047a0400, 0x8080808760800, 0x101010106e1000, 0x202020205e2000, 
+    0x404040403e4000, 0x808080807e8000, 0x101017e010100, 0x202027c020200, 
+    0x404047a040400, 0x8080876080800, 0x1010106e101000, 0x2020205e202000, 
+    0x4040403e404000, 0x8080807e808000, 0x1017e01010100, 0x2027c02020200, 
+    0x4047a04040400, 0x8087608080800, 0x10106e10101000, 0x20205e20202000, 
+    0x40403e40404000, 0x80807e80808000, 0x17e0101010100, 0x27c0202020200, 
+    0x47a0404040400, 0x8760808080800, 0x106e1010101000, 0x205e2020202000, 
+    0x403e4040404000, 0x807e8080808000, 0x7e010101010100, 0x7c020202020200, 
+    0x7a040404040400, 0x76080808080800, 0x6e101010101000, 0x5e202020202000, 
+    0x3e404040404000, 0x7e808080808000, 0x7e01010101010100, 0x7c02020202020200, 
+    0x7a04040404040400, 0x7608080808080800, 0x6e10101010101000, 0x5e20202020202000, 
+    0x3e40404040404000, 0x7e80808080808000,
+];
+pub static ROOK_TABLE_OFFSETS: [usize; 64] = [0x0, 0x1000, 0x1800, 0x2000, 
+    0x2800, 0x3000, 0x3800, 0x4000, 0x5000, 0x5800, 0x5c00, 0x6000, 0x6400, 
+    0x6800, 0x6c00, 0x7000, 0x7800, 0x8000, 0x8400, 0x8800, 0x8c00, 0x9000, 
+    0x9400, 0x9800, 0xa000, 0xa800, 0xac00, 0xb000, 0xb400, 0xb800, 0xbc00, 
+    0xc000, 0xc800, 0xd000, 0xd400, 0xd800, 0xdc00, 0xe000, 0xe400, 0xe800, 
+    0xf000, 0xf800, 0xfc00, 0x10000, 0x10400, 0x10800, 0x10c00, 0x11000, 
+    0x11800, 0x12000, 0x12400, 0x12800, 0x12c00, 0x13000, 0x13400, 0x13800, 
+    0x14000, 0x15000, 0x15800, 0x16000, 0x16800, 0x17000, 0x17800, 0x18000,
+];
+pub static ROOK_FEND_MASKS: [u64; 0x19000] = unsafe { std::mem::transmute_copy(include_bytes!("rook.dat")) };
+
+pub static BISHOP_SHADOW_MASKS: [u64; 64] = [0x40201008040200, 0x402010080400, 
+    0x4020100a00, 0x40221400, 0x2442800, 0x204085000, 0x20408102000, 
+    0x2040810204000, 0x20100804020000, 0x40201008040000, 0x4020100a0000, 
+    0x4022140000, 0x244280000, 0x20408500000, 0x2040810200000, 0x4081020400000, 
+    0x10080402000200, 0x20100804000400, 0x4020100a000a00, 0x402214001400, 
+    0x24428002800, 0x2040850005000, 0x4081020002000, 0x8102040004000, 
+    0x8040200020400, 0x10080400040800, 0x20100a000a1000, 0x40221400142200, 
+    0x2442800284400, 0x4085000500800, 0x8102000201000, 0x10204000402000, 
+    0x4020002040800, 0x8040004081000, 0x100a000a102000, 0x22140014224000, 
+    0x44280028440200, 0x8500050080400, 0x10200020100800, 0x20400040201000, 
+    0x2000204081000, 0x4000408102000, 0xa000a10204000, 0x14001422400000, 
+    0x28002844020000, 0x50005008040200, 0x20002010080400, 0x40004020100800, 
+    0x20408102000, 0x40810204000, 0xa1020400000, 0x142240000000, 0x284402000000, 
+    0x500804020000, 0x201008040200, 0x402010080400, 0x2040810204000, 
+    0x4081020400000, 0xa102040000000, 0x14224000000000, 0x28440200000000, 
+    0x50080402000000, 0x20100804020000, 0x40201008040200, 
+];
+pub static BISHOP_TABLE_OFFSETS: [usize; 64] = [0x0, 0x40, 0x60, 0x80, 0xa0, 
+    0xc0, 0xe0, 0x100, 0x140, 0x160, 0x180, 0x1a0, 0x1c0, 0x1e0, 0x200, 0x220, 
+    0x240, 0x260, 0x280, 0x300, 0x380, 0x400, 0x480, 0x4a0, 0x4c0, 0x4e0, 0x500, 
+    0x580, 0x780, 0x980, 0xa00, 0xa20, 0xa40, 0xa60, 0xa80, 0xb00, 0xd00, 0xf00, 
+    0xf80, 0xfa0, 0xfc0, 0xfe0, 0x1000, 0x1080, 0x1100, 0x1180, 0x1200, 0x1220, 
+    0x1240, 0x1260, 0x1280, 0x12a0, 0x12c0, 0x12e0, 0x1300, 0x1320, 0x1340, 
+    0x1380, 0x13a0, 0x13c0, 0x13e0, 0x1400, 0x1420, 0x1440
+];
+pub static BISHOP_FEND_MASKS: [u64; 0x1480] = unsafe { std::mem::transmute_copy(include_bytes!("bishop.dat")) };
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    pub fn test_pawns_fend_mask_actv() {
+        assert_eq!(get_pawns_fend_actv(0x8000010010000081), 0x2002800004200);
+    }
+    
+    #[test]
+    pub fn test_pawns_fend_mask_idle() {
+        assert_eq!(get_pawns_fend_idle(0xA100000001100080), 0x52000000022800);
+    }
+    
+    #[test]
+    pub fn test_knights_fend_mask() {
+        assert_eq!(get_knights_fend(0xA100000001100080), 0xAC522C44446628);
+    }
+    
+    #[test]
+    pub fn test_bishops_fend_mask() {
+        assert_eq!(get_bishops_fend(0x2000000000100000, 0x0), 0x518A442A012844);
+        assert_eq!(get_bishops_fend(0x2000000000100000, 0x518A442A012844), 0x50000028002800);
+        assert_eq!(get_bishops_fend(0x2000000000100000, 0x51800028012804), 0x50000028002800);
+        assert_eq!(get_bishops_fend(0x2000000000100000, 0x800400000000), 0x50884428002844);
+    }
+    
+    #[test]
+    pub fn test_rooks_fend_mask() {
+        assert_eq!(get_rooks_fend(0x2000000000100000, 0x0), 0xDF30303030EF3030);
+        assert_eq!(get_rooks_fend(0x2000000000100000, 0xDF30303030EF3030), 0x5020000010281000);
+        assert_eq!(get_rooks_fend(0x2000000000100000, 0x5A20500030A83010), 0x5020000010281000);
+        assert_eq!(get_rooks_fend(0x2000000000100000, 0x100101000220000), 0xDF202030302E1010);
+    }
+    
+    #[test]
+    pub fn test_queens_fend_mask() {
+        assert_eq!(get_queens_fend(0x2000000000100000, 0x0), 0xDF71BA743AEF3874);
+        assert_eq!(get_queens_fend(0x2000000000100000, 0xDF71BA743AEF3874), 0x5070000038283800);
+        assert_eq!(get_queens_fend(0x2000000000100000, 0x59740A603AA93854), 0x5070000038283800);
+        assert_eq!(get_queens_fend(0x2000000000100000, 0x1200800020223000), 0xD071BA343A2F3804);
+    }
+}
