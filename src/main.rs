@@ -1,4 +1,5 @@
-#![feature(maybe_uninit_slice)]
+
+mod gen_magics;
 
 fn main() {
     

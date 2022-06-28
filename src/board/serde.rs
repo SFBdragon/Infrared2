@@ -1,18 +1,18 @@
 //! Chess board and move string coding and conversion.
 
-use super::Piece;
+use super::{Piece, Board};
 
 
 /// Converts a position from algebraic notation.
 /// ### Panics:
 /// Panics when `alg` byte length is not 2.
-pub fn alg_pos_to_sq(alg: &str) -> Option<usize> {
+pub fn alg_pos_to_sq(alg: &str) -> Option<u8> {
     let arr = alg.as_bytes();
     assert_eq!(arr.len(), 2);
     let file = arr[0].to_ascii_lowercase();
     let rank = arr[1].to_ascii_lowercase();
     if file >= b'a' && file <= b'h' || rank >= b'1' && rank <= b'8' {
-        Some((file - b'a') as usize + (rank - b'1') as usize * 8)
+        Some((file - b'a') + (rank - b'1') * 8)
     } else {
         None
     }
@@ -22,21 +22,21 @@ pub fn alg_pos_to_sq(alg: &str) -> Option<usize> {
 /// Valid ASCII and UTF8 bytes. File is in lowercase.
 /// ### Panics:
 /// Panics when `sq` is bigger than 63.
-pub fn sq_to_alg_pos(sq: usize) -> String {
+pub fn sq_to_alg_pos(sq: u8) -> String {
     assert!(sq < 64);
     let mut alg_pos = String::with_capacity(2);
-    alg_pos.push(char::from_u32(sq as u32 % 8 + b'a' as u32).unwrap());
-    alg_pos.push(char::from_u32(sq as u32 / 8 + b'1' as u32).unwrap());
+    alg_pos.push(char::from_u32((sq % 8 + b'a') as u32).unwrap());
+    alg_pos.push(char::from_u32((sq / 8 + b'1') as u32).unwrap());
     alg_pos
 }
 
-pub struct Move {
-    pub from: usize,
-    pub to: usize,
+pub struct PureCoordMove {
+    pub from: u8,
+    pub to: u8,
     pub promotion: Option<Piece>,
 }
 
-impl Move {
+impl PureCoordMove {
     /// Convert from pure coordinate notation.
     /// ### Panics:
     /// Panics when `coord` byte length is not 4 or 5.
@@ -87,15 +87,19 @@ impl Move {
     }
 }
 
-impl super::Board {
+impl Board {
     pub const START_POS_FEN: &'static str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
-    /* /// Validate and play `mov`.
-    pub fn make_move(&mut self, mov: Move) -> Result<(), ()> {
+    /// Validate and play `mov`.
+    pub fn make_checked(&mut self, pcm: PureCoordMove) -> Result<(), ()> {
+
+        //self.make(from, to, piece)
 
         todo!()
-    } */
+    }
 
+    /// todo
+    /// returns err on illegal position (idle in check) or parse error
     pub fn from_fen(fen: &str) -> Result<Self, ()> {
         if !fen.is_ascii() { return Err(()); }
 
@@ -105,7 +109,7 @@ impl super::Board {
         let colour = split.next().ok_or(())?.trim();
         let castle_cap = split.next().ok_or(())?.trim();
         let en_passant = split.next().ok_or(())?.trim();
-        let fifty_ply_clock = split.next().ok_or(())?.trim();
+        let fifty_move_clock = split.next().ok_or(())?.trim();
         let move_count = split.next().ok_or(())?.trim();
 
         
@@ -114,8 +118,6 @@ impl super::Board {
             all: 0,
             actv: 0,
             idle: 0,
-            idle_fend: 0,
-            actv_fend: 0,
             pawns: 0,
             bishops: 0,
             knights: 0,
@@ -125,7 +127,7 @@ impl super::Board {
             en_passant: 0,
             move_count: move_count.parse::<usize>().map_err(|_| ())?,
             colour: 0,
-            fifty_ply_clock: fifty_ply_clock.parse::<u8>().map_err(|_| ())?,
+            fifty_move_clock: fifty_move_clock.parse::<u8>().map_err(|_| ())?,
             actv_castle_flags: super::CastleFlags::empty(),
             idle_castle_flags: super::CastleFlags::empty(),
         };
@@ -192,11 +194,7 @@ impl super::Board {
         }
         board.all = board.actv | board.idle;
 
-        // initialize dependent data
-        board.calc_idle_fend();
-        board.calc_actv_fend();
-        
-        Ok(board)
+        if board.is_idle_in_check() { Err(()) } else { Ok(board) }
     }
 
     pub fn to_fen(&self) -> String {
@@ -274,12 +272,12 @@ impl super::Board {
         if self.en_passant == 0 {
             fen.push('-');
         } else {
-            let pos = sq_to_alg_pos(self.en_passant.trailing_zeros() as usize);
+            let pos = sq_to_alg_pos(self.en_passant.trailing_zeros() as u8);
             fen.push_str(pos.as_str());
         }
         fen.push(' ');
 
-        fen.push_str(self.fifty_ply_clock.to_string().as_str());
+        fen.push_str(self.fifty_move_clock.to_string().as_str());
         fen.push(' ');
 
         fen.push_str(self.move_count.to_string().as_str());

@@ -3,15 +3,18 @@
 use std::mem::MaybeUninit;
 
 use crate::{
-    for_msk, for_sq, 
+    for_sq, 
     board::{fend, Board, Piece, CastleFlags}
 };
 
+use super::Move;
+
 impl Board {
     #[inline]
-    pub fn get_pawn_moves_actv(&self, from: u64) -> MoveSet {
-        debug_assert!(from & 0xFFFF0000000000FF == 0);
+    pub fn pawn_moves_actv(&self, sq: u8) -> MoveSet {
         let mut to_set = 0u64;
+        let from = 1u64 << sq;
+        debug_assert!(from & 0xFFFF0000000000FF == 0);
 
         to_set |= from << 0o10 & !self.all;
         to_set |= to_set & 0xFF0000 << 0o10 & !self.all;
@@ -20,76 +23,78 @@ impl Board {
         to_set |= (from & !0x0101010101010101) << 0o7  & capt;
         to_set |= (from & !0x8080808080808080) << 0o11 & capt;
     
-        MoveSet { from, to_set, piece: Piece::Pawn }
+        MoveSet { to_set, from_sq: sq, piece: Piece::Pawn }
     }
 
     #[inline]
-    pub fn get_pawn_proms_actv(&self, from: u64) -> PromSet {
-        debug_assert!(from & !0x00FF000000000000 == 0);
+    pub fn pawn_proms_actv(&self, sq: u8) -> PromSet {
         let mut to_set = 0u64;
+        let from = 1u64 << sq;
+        debug_assert!(from & !0x00FF000000000000 == 0);
 
         to_set |= from << 0o10 & !self.all;
 
         to_set |= (from & !0x0101010101010101) << 0o7  & self.idle;
         to_set |= (from & !0x8080808080808080) << 0o11 & self.idle;
     
-        PromSet { from, to_set }
+        PromSet { to_set, from_sq: sq }
     }
 
     #[inline]
-    pub fn get_knight_moves_actv(&self, sq: usize) -> MoveSet {
+    pub fn knight_moves_actv(&self, sq: u8) -> MoveSet {
         MoveSet {
-            from: 1 << sq,
-            to_set: fend::get_knight_fend(sq) & !self.actv,
+            from_sq: 1 << sq,
+            to_set: fend::knight_fend(sq) & !self.actv,
             piece: Piece::Knight,
         }
     }
 
     #[inline]
-    pub fn get_bishop_moves_actv(&self, sq: usize) -> MoveSet {
+    pub fn bishop_moves_actv(&self, sq: u8) -> MoveSet {
         MoveSet {
-            from: 1 << sq,
-            to_set: fend::get_bishop_fend(sq, self.all) & !self.actv,
+            from_sq: 1 << sq,
+            to_set: fend::bishop_fend(sq, self.all) & !self.actv,
             piece: Piece::Bishop,
         }
     }
 
     #[inline]
-    pub fn get_rook_moves_actv(&self, sq: usize) -> MoveSet {
+    pub fn rook_moves_actv(&self, sq: u8) -> MoveSet {
         MoveSet {
-            from: 1 << sq,
-            to_set: fend::get_rook_fend(sq, self.all) & !self.actv,
+            from_sq: 1 << sq,
+            to_set: fend::rook_fend(sq, self.all) & !self.actv,
             piece: Piece::Rook,
         }
     }
 
     #[inline]
-    pub fn get_queen_moves_actv(&self, sq: usize) -> MoveSet {
+    pub fn queen_moves_actv(&self, sq: u8) -> MoveSet {
         MoveSet {
-            from: 1 << sq,
-            to_set: fend::get_queen_fend(sq, self.all) & !self.actv,
+            from_sq: 1 << sq,
+            to_set: fend::queen_fend(sq, self.all) & !self.actv,
             piece: Piece::Queen,
         }
     }
 
     #[inline]
-    pub fn get_king_moves_actv(&self, sq: usize) -> MoveSet {
-        let mut to_set = fend::get_king_fend(sq) & !self.actv & !self.idle_fend;
+    pub fn king_moves_actv(&self, sq: u8) -> MoveSet {
+        // fixme?
+        let mut to_set = fend::king_fend(sq) & !self.actv /* & !self.idle_fend */;
 
         // castling
         if self.actv_castle_flags.contains(CastleFlags::KINGSIDE) {
-            if self.actv & 0x60 == 0 && self.idle_fend & 0x70 == 0 {
+            if self.actv & 0x60 == 0 /* && self.idle_fend & 0x70 == 0 */ {
                 to_set |= 0x40;
             }
         }
         if self.actv_castle_flags.contains(CastleFlags::QUEENSIDE) {
-            if self.actv & 0xE == 0 && self.idle_fend & 0x1C == 0 {
+            if self.actv & 0xE == 0 /* && self.idle_fend & 0x1C == 0 */ {
                 to_set |= 0x4;
             }
         }
         
         MoveSet {
-            from: 1 << sq,
+            from_sq: 1 << sq,
             to_set, piece:
             Piece::King
         }
@@ -98,34 +103,33 @@ impl Board {
 
     /// Provides illegal moves wrt checking.
     pub fn get_moveset_actv(&self, tab: &mut MoveSetTable) {
-        for_msk!(from in self.pawns & self.actv & 0x00FF000000000000 => {
-            tab.push_prom(self.get_pawn_proms_actv(from));
+        for_sq!(sq in self.pawns & self.actv & 0x00FF000000000000 => {
+            tab.push_prom(self.pawn_proms_actv(sq));
         });
-        for_msk!(from in self.pawns & self.actv & !0x00FF000000000000 => {
-            tab.push(self.get_pawn_moves_actv(from));
+        for_sq!(sq in self.pawns & self.actv & !0x00FF000000000000 => {
+            tab.push(self.pawn_moves_actv(sq));
         });
         for_sq!(sq in self.knights & self.actv => {
-            tab.push(self.get_knight_moves_actv(sq));
+            tab.push(self.knight_moves_actv(sq));
         });
         for_sq!(sq in self.bishops & self.actv => {
-            tab.push(self.get_bishop_moves_actv(sq));
+            tab.push(self.bishop_moves_actv(sq));
         });
         for_sq!(sq in self.rooks & self.actv => {
-            tab.push(self.get_rook_moves_actv(sq));
+            tab.push(self.rook_moves_actv(sq));
         });
         for_sq!(sq in self.queens & self.actv => {
-            tab.push(self.get_queen_moves_actv(sq));
+            tab.push(self.queen_moves_actv(sq));
         });
-        let king_sq = (self.kings & self.actv).trailing_zeros() as usize;
-        tab.push(self.get_king_moves_actv(king_sq));
+        tab.push(self.king_moves_actv(self.actv_king_sq()));
     }
 }
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MoveSet {
-    pub from: u64,
     pub to_set: u64,
+    pub from_sq: u8,
     pub piece: Piece,
 }
 
@@ -133,7 +137,7 @@ impl MoveSet {
     #[inline]
     pub fn iter(&self) -> MoveSetIter {
         MoveSetIter {
-            from: self.from,
+            from_sq: self.from_sq,
             to_set: self.to_set,
             piece: self.piece,
         }
@@ -142,17 +146,17 @@ impl MoveSet {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PromSet {
-    pub from: u64,
     pub to_set: u64,
+    pub from_sq: u8,
 }
 
 impl PromSet {
     #[inline]
     pub fn iter(&self) -> PromSetIter {
         PromSetIter {
-            from: self.from,
+            from_sq: self.from_sq,
             to_set: self.to_set,
-            to: 0,
+            to_sq: 0,
             piece_index: PROM_PIECE_COUNT
         }
     }
@@ -160,9 +164,9 @@ impl PromSet {
     #[inline]
     pub fn ai_iter(&self) -> AiPromSetIter {
         AiPromSetIter {
-            from: self.from,
+            from_sq: self.from_sq,
             to_set: self.to_set,
-            to: 0,
+            to_sq: 0,
             piece_index: AI_PROM_PIECE_COUNT
         }
     }
@@ -171,23 +175,22 @@ impl PromSet {
 
 #[derive(Debug, Clone)]
 pub struct MoveSetIter {
-    from: u64,
     to_set: u64,
+    from_sq: u8,
     piece: Piece,
 }
 
 impl Iterator for MoveSetIter {
-    type Item = (u64, u64, Piece);
+    type Item = Move;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.to_set == 0 { return None; }
 
-        let tss1 = self.to_set - 1;
-        let to = self.to_set & !tss1;
-        self.to_set &= tss1;
+        let to_sq = self.to_set.trailing_zeros() as u8;
+        self.to_set &= self.to_set - 1;
 
-        Some((self.from, to, self.piece))
+        Some(Move::new(self.from_sq, to_sq, self.piece))
     }
 }
 
@@ -204,14 +207,14 @@ const PROM_PIECE_SET: [Piece; 4] = [Piece::Queen, Piece::Knight, Piece::Rook, Pi
 /// from a packed `PromSet` structure.
 #[derive(Debug, Clone)]
 pub struct GenPromSetIter<const PIECE_COUNT: usize> {
-    from: u64,
     to_set: u64,
-    to: u64, 
+    from_sq: u8,
+    to_sq: u8, 
     piece_index: usize,
 }
 
 impl<const PIECE_COUNT: usize> Iterator for GenPromSetIter<PIECE_COUNT> {
-    type Item = (u64, u64, Piece);
+    type Item = Move;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -222,14 +225,13 @@ impl<const PIECE_COUNT: usize> Iterator for GenPromSetIter<PIECE_COUNT> {
 
             self.piece_index = 0;
 
-            let tss1 = self.to_set - 1;
-            self.to = self.to_set & !tss1;
-            self.to_set &= tss1;
+            self.to_sq = self.to_set.trailing_zeros() as u8;
+            self.to_set &= self.to_set - 1;
         }
         
         let prom = PROM_PIECE_SET[self.piece_index];
         self.piece_index += 1;
-        Some((self.from, self.to, prom))
+        Some(Move::new(self.from_sq, self.to_sq, prom))
     }
 }
 
