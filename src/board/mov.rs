@@ -17,7 +17,7 @@ impl Board {
         debug_assert!(from & 0xFFFF0000000000FF == 0);
 
         to_set |= from << 0o10 & !self.all;
-        to_set |= to_set & 0xFF0000 << 0o10 & !self.all;
+        to_set |= (to_set & 0xFF0000) << 0o10 & !self.all;
 
         let capt = self.idle | self.en_passant;
         to_set |= (from & !0x0101010101010101) << 0o7  & capt;
@@ -43,7 +43,7 @@ impl Board {
     #[inline]
     pub fn knight_moves_actv(&self, sq: u8) -> MoveSet {
         MoveSet {
-            from_sq: 1 << sq,
+            from_sq: sq,
             to_set: fend::knight_fend(sq) & !self.actv,
             piece: Piece::Knight,
         }
@@ -52,7 +52,7 @@ impl Board {
     #[inline]
     pub fn bishop_moves_actv(&self, sq: u8) -> MoveSet {
         MoveSet {
-            from_sq: 1 << sq,
+            from_sq: sq,
             to_set: fend::bishop_fend(sq, self.all) & !self.actv,
             piece: Piece::Bishop,
         }
@@ -61,7 +61,7 @@ impl Board {
     #[inline]
     pub fn rook_moves_actv(&self, sq: u8) -> MoveSet {
         MoveSet {
-            from_sq: 1 << sq,
+            from_sq: sq,
             to_set: fend::rook_fend(sq, self.all) & !self.actv,
             piece: Piece::Rook,
         }
@@ -70,58 +70,44 @@ impl Board {
     #[inline]
     pub fn queen_moves_actv(&self, sq: u8) -> MoveSet {
         MoveSet {
-            from_sq: 1 << sq,
+            from_sq: sq,
             to_set: fend::queen_fend(sq, self.all) & !self.actv,
             piece: Piece::Queen,
         }
     }
 
-    #[inline]
     pub fn king_moves_actv(&self, sq: u8) -> MoveSet {
-        // fixme?
-        let mut to_set = fend::king_fend(sq) & !self.actv /* & !self.idle_fend */;
+        let mut to_set = fend::king_fend(sq) & !self.actv;
 
         // castling
         if self.actv_castle_flags.contains(CastleFlags::KINGSIDE) {
-            if self.actv & 0x60 == 0 /* && self.idle_fend & 0x70 == 0 */ {
+            if self.actv & 0x60 == 0 && self.can_kingside_castle() {
                 to_set |= 0x40;
             }
         }
         if self.actv_castle_flags.contains(CastleFlags::QUEENSIDE) {
-            if self.actv & 0xE == 0 /* && self.idle_fend & 0x1C == 0 */ {
+            if self.actv & 0xE == 0 && self.can_queenside_castle() {
                 to_set |= 0x4;
             }
         }
         
         MoveSet {
-            from_sq: 1 << sq,
-            to_set, piece:
-            Piece::King
+            from_sq: sq,
+            to_set,
+            piece: Piece::King,
         }
     }
 
 
     /// Provides illegal moves wrt checking.
     pub fn get_moveset_actv(&self, tab: &mut MoveSetTable) {
-        for_sq!(sq in self.pawns & self.actv & 0x00FF000000000000 => {
-            tab.push_prom(self.pawn_proms_actv(sq));
-        });
-        for_sq!(sq in self.pawns & self.actv & !0x00FF000000000000 => {
-            tab.push(self.pawn_moves_actv(sq));
-        });
-        for_sq!(sq in self.knights & self.actv => {
-            tab.push(self.knight_moves_actv(sq));
-        });
-        for_sq!(sq in self.bishops & self.actv => {
-            tab.push(self.bishop_moves_actv(sq));
-        });
-        for_sq!(sq in self.rooks & self.actv => {
-            tab.push(self.rook_moves_actv(sq));
-        });
-        for_sq!(sq in self.queens & self.actv => {
-            tab.push(self.queen_moves_actv(sq));
-        });
-        tab.push(self.king_moves_actv(self.actv_king_sq()));
+        for_sq!(sq in self.actv_pawns & 0x00FF000000000000 => { tab.push_prom(self.pawn_proms_actv(sq)) });
+        for_sq!(sq in self.actv_pawns & !0x00FF000000000000 => { tab.push(self.pawn_moves_actv(sq)) });
+        for_sq!(sq in self.actv_knights => { tab.push(self.knight_moves_actv(sq)) });
+        for_sq!(sq in self.actv_bishops => { tab.push(self.bishop_moves_actv(sq)) });
+        for_sq!(sq in self.actv_rooks => { tab.push(self.rook_moves_actv(sq)) });
+        for_sq!(sq in self.actv_queens => { tab.push(self.queen_moves_actv(sq)) });
+        tab.push(self.king_moves_actv(self.actv_king_sq));
     }
 }
 

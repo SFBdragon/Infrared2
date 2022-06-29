@@ -1,5 +1,7 @@
 //! Chess board and move string coding and conversion.
 
+use core::panic;
+
 use super::{Piece, Board};
 
 
@@ -112,31 +114,30 @@ impl Board {
         let fifty_move_clock = split.next().ok_or(())?.trim();
         let move_count = split.next().ok_or(())?.trim();
 
-        
+        // init board, assume white is actv, this is fixed later
         let mut board = Self {
             hash: 0,
             all: 0,
             actv: 0,
             idle: 0,
-            pawns: 0,
-            bishops: 0,
-            knights: 0,
-            rooks: 0,
-            queens: 0,
-            kings: 0,
+            actv_pawns: 0,
+            actv_bishops: 0,
+            actv_knights: 0,
+            actv_rooks: 0,
+            actv_queens: 0,
+            actv_king_sq: 0,
+            idle_pawns: 0,
+            idle_bishops: 0,
+            idle_knights: 0,
+            idle_rooks: 0,
+            idle_queens: 0,
+            idle_king_sq: 0,
             en_passant: 0,
-            move_count: move_count.parse::<usize>().map_err(|_| ())?,
-            colour: 0,
-            fifty_move_clock: fifty_move_clock.parse::<u8>().map_err(|_| ())?,
+            move_count: move_count.parse::<u16>().map_err(|_| ())?,
+            colour: 1,
+            fifty_move_clock: fifty_move_clock.parse::<u16>().map_err(|_| ())?,
             actv_castle_flags: super::CastleFlags::empty(),
             idle_castle_flags: super::CastleFlags::empty(),
-        };
-
-        // determine colour
-        board.colour = match colour {
-            "w" => 1,
-            "b" => -1,
-            _ => return Err(()),
         };
 
         // determine en passant status
@@ -150,20 +151,11 @@ impl Board {
             }
         };
         
-        // create white/black references to actv/idle
-        let (white, white_castle, black, black_castle) = if board.colour == 1 { (
-            &mut board.actv, &mut board.actv_castle_flags,
-            &mut board.idle, &mut board.idle_castle_flags,
-        ) } else { (
-            &mut board.idle, &mut board.idle_castle_flags,
-            &mut board.actv, &mut board.actv_castle_flags,
-        ) };
-        
         // castling capabilities
-        if castle_cap.contains('K') { *white_castle |= super::CastleFlags::KINGSIDE; }
-        if castle_cap.contains('Q') { *white_castle |= super::CastleFlags::QUEENSIDE; }
-        if castle_cap.contains('k') { *black_castle |= super::CastleFlags::KINGSIDE; }
-        if castle_cap.contains('q') { *black_castle |= super::CastleFlags::QUEENSIDE; }
+        if castle_cap.contains('K') { board.actv_castle_flags |= super::CastleFlags::KINGSIDE; }
+        if castle_cap.contains('Q') { board.actv_castle_flags |= super::CastleFlags::QUEENSIDE; }
+        if castle_cap.contains('k') { board.idle_castle_flags |= super::CastleFlags::KINGSIDE; }
+        if castle_cap.contains('q') { board.idle_castle_flags |= super::CastleFlags::QUEENSIDE; }
 
         // parse piece location data
         let mut sq = 56usize; // fen ranks are in reverse order
@@ -174,25 +166,42 @@ impl Board {
             } else if c.is_ascii_digit() {
                 sq += c.to_digit(16).unwrap() as usize;
             } else {
-                if c.is_uppercase() {
-                    *white |= 1 << sq;
+                if c.is_ascii_uppercase() {
+                    board.actv |= 1 << sq;
                 } else {
-                    *black |= 1 << sq;
+                    board.idle |= 1 << sq;
                 }
                 
-                match c.to_lowercase().next().ok_or(())? {
-                    'p' => board.pawns |= 1 << sq,
-                    'n' => board.knights |= 1 << sq,
-                    'b' => board.bishops |= 1 << sq,
-                    'r' => board.rooks |= 1 << sq,
-                    'q' => board.queens |= 1 << sq,
-                    'k' => board.kings |= 1 << sq,
+                match c {
+                    'P' => board.actv_pawns |= 1 << sq,
+                    'N' => board.actv_knights |= 1 << sq,
+                    'B' => board.actv_bishops |= 1 << sq,
+                    'R' => board.actv_rooks |= 1 << sq,
+                    'Q' => board.actv_queens |= 1 << sq,
+                    'K' => board.actv_king_sq = sq as u8,
+
+                    'p' => board.idle_pawns |= 1 << sq,
+                    'n' => board.idle_knights |= 1 << sq,
+                    'b' => board.idle_bishops |= 1 << sq,
+                    'r' => board.idle_rooks |= 1 << sq,
+                    'q' => board.idle_queens |= 1 << sq,
+                    'k' => board.idle_king_sq = sq as u8,
+
                     _ => return Err(()),
                 }
                 sq += 1;
             }
         }
+        
         board.all = board.actv | board.idle;
+        
+        // board init up until this point assumes white is actv
+        // if this is wrong, flip the board
+        match colour {
+            "w" => (),
+            "b" => board.flip(),
+            _ => return Err(()),
+        };
 
         if board.is_idle_in_check() { Err(()) } else { Ok(board) }
     }
@@ -200,12 +209,9 @@ impl Board {
     pub fn to_fen(&self) -> String {
         let mut fen = String::new();
 
-        let (white, white_castle, black_castle) = if self.colour == 1 { (
-            self.actv, self.actv_castle_flags, self.idle_castle_flags,
-        ) } else { (
-            self.idle, self.idle_castle_flags, self.actv_castle_flags,
-        ) };
-
+        // ensure actv is white and idle is black
+        let mut board = self.clone();
+        if board.colour == -1 { board.flip(); }
 
         for rank in (0..8).rev() { // fen ranks are in reverse order
             let mut rank_str = String::new();
@@ -213,7 +219,7 @@ impl Board {
             for sq in (rank * 8)..(rank * 8 + 8) {
                 let mask = 1u64 << sq;
 
-                if self.all & mask == 0 {
+                if board.all & mask == 0 {
                     blank_count += 1;
                     continue;
                 } else {
@@ -223,26 +229,27 @@ impl Board {
                     }
                 }
 
-                let c;
-                if self.pawns & mask != 0 {
-                    c = 'p';
-                } else if self.knights & mask != 0 {
-                    c = 'n';
-                } else if self.bishops & mask != 0 {
-                    c = 'b';
-                } else if self.rooks & mask != 0 {
-                    c = 'r';
-                } else if self.queens & mask != 0 {
-                    c = 'q';
-                } else {
-                    c = 'k';
-                }
+                let c = if let Some(piece) = board.get_actv_piece_at(mask) {
+                    match piece {
+                        Piece::King =>   'K',
+                        Piece::Queen =>  'Q',
+                        Piece::Rook =>   'R',
+                        Piece::Bishop => 'B',
+                        Piece::Knight => 'N',
+                        Piece::Pawn =>   'P',
+                    }
+                } else if let Some(piece) = board.get_idle_piece_at(mask) {
+                    match piece {
+                        Piece::King =>   'k',
+                        Piece::Queen =>  'q',
+                        Piece::Rook =>   'r',
+                        Piece::Bishop => 'b',
+                        Piece::Knight => 'n',
+                        Piece::Pawn =>   'p',
+                    }
+                } else { panic!() };
 
-                if white & mask != 0 {
-                    rank_str.push(c.to_ascii_uppercase())
-                } else {
-                    rank_str.push(c)
-                }
+                rank_str.push(c);
             }
 
             if blank_count > 0 {
@@ -259,20 +266,20 @@ impl Board {
         fen.push(if self.colour == 1 { 'w' } else { 'b' });
         fen.push(' ');
 
-        if (white_castle | black_castle) == super::CastleFlags::empty() {
+        if (board.actv_castle_flags | board.idle_castle_flags) == super::CastleFlags::empty() {
             fen.push('-');
         } else {
-            if white_castle.contains(super::CastleFlags::KINGSIDE)  { fen.push('K'); }
-            if white_castle.contains(super::CastleFlags::QUEENSIDE) { fen.push('Q'); }
-            if black_castle.contains(super::CastleFlags::KINGSIDE)  { fen.push('k'); }
-            if black_castle.contains(super::CastleFlags::QUEENSIDE) { fen.push('q'); }
+            if board.actv_castle_flags.contains(super::CastleFlags::KINGSIDE)  { fen.push('K'); }
+            if board.actv_castle_flags.contains(super::CastleFlags::QUEENSIDE) { fen.push('Q'); }
+            if board.idle_castle_flags.contains(super::CastleFlags::KINGSIDE)  { fen.push('k'); }
+            if board.idle_castle_flags.contains(super::CastleFlags::QUEENSIDE) { fen.push('q'); }
         }
         fen.push(' ');
 
-        if self.en_passant == 0 {
+        if board.en_passant == 0 {
             fen.push('-');
         } else {
-            let pos = sq_to_alg_pos(self.en_passant.trailing_zeros() as u8);
+            let pos = sq_to_alg_pos(board.en_passant.trailing_zeros() as u8);
             fen.push_str(pos.as_str());
         }
         fen.push(' ');
@@ -297,6 +304,7 @@ mod tests {
         let fen2 = "R7/6k1/8/8/P6P/6K1/8/4r3 b - - 0 1";
 
         assert_eq!(Board::START_POS_FEN, crate::board::Board::from_fen(Board::START_POS_FEN).unwrap().to_fen());
+        dbg!(crate::board::Board::from_fen(fen1).unwrap());
         assert_eq!(fen1, crate::board::Board::from_fen(fen1).unwrap().to_fen());
         assert_eq!(fen2, crate::board::Board::from_fen(fen2).unwrap().to_fen());
     }

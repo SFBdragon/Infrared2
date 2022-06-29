@@ -37,6 +37,7 @@ pub const fn flip_sq(sq: u8) -> u8 {
     sq ^ 0o70
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Move {
     pub from_sq: u8,
     pub to_sq: u8,
@@ -81,8 +82,6 @@ bitflags::bitflags! {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Board {
-    /// Zobrist hash.
-    pub hash: u64,
 
     /// Bitboard of all pieces.
     pub all: u64,
@@ -91,22 +90,33 @@ pub struct Board {
     /// Bitboard of the pieces of the colour that moved.
     pub idle: u64,
 
-    pub pawns: u64,
-    pub bishops: u64,
-    pub knights: u64,
-    pub rooks: u64,
-    pub queens: u64,
-    pub kings: u64,
+    // todo split actv/idle
+    pub actv_pawns: u64,
+    pub actv_bishops: u64,
+    pub actv_knights: u64,
+    pub actv_rooks: u64,
+    pub actv_queens: u64,
+    pub actv_king_sq: u8,
+
+    pub idle_pawns: u64,
+    pub idle_bishops: u64,
+    pub idle_knights: u64,
+    pub idle_rooks: u64,
+    pub idle_queens: u64,
+    pub idle_king_sq: u8,
+
+    /// Move count since game begin.
+    pub move_count: u16,
+    /// `1` is white, `-1` is black.
+    pub colour: i8,
 
     /// Bitboard of the square behind `prev` pawn double-advance. Else zero.
     pub en_passant: u64,
+    /// Zobrist hash.
+    pub hash: u64,
 
-    /// Move count since game begin.
-    pub move_count: usize,
-    /// `1` is white, `-1` is black.
-    pub colour: i8,
     /// Count plies to 100 since the last capture or pawn-advance.
-    pub fifty_move_clock: u8,
+    pub fifty_move_clock: u16,
     /// `next`'s castling capabilities.
     pub actv_castle_flags: CastleFlags,
     /// `prev`'s castling capabilities.
@@ -114,22 +124,40 @@ pub struct Board {
 }
 
 impl Board {
-
-    
-    /// Returns the piece at sq and whether it is `actv`'s or not, if there is one.
-    pub fn get_piece_at(&self, mask: u64) -> Option<Piece> {
-        if self.all & mask == 0 {
+    /// Returns the piece at sq, if there is one.
+    pub fn get_actv_piece_at(&self, mask: u64) -> Option<Piece> {
+        if self.actv & mask == 0 {
             None
         } else {
-            Some(  if self.pawns & mask != 0 {
+            Some(  if self.actv_pawns & mask != 0 {
                 Piece::Pawn
-            } else if self.knights & mask != 0 {
+            } else if self.actv_knights & mask != 0 {
                 Piece::Knight
-            } else if self.bishops & mask != 0 {
+            } else if self.actv_bishops & mask != 0 {
                 Piece::Bishop
-            } else if self.rooks & mask != 0 {
+            } else if self.actv_rooks & mask != 0 {
                 Piece::Rook
-            } else if self.queens & mask != 0 {
+            } else if self.actv_queens & mask != 0 {
+                Piece::Queen
+            } else { // king
+                Piece::King
+            })
+        }
+    }
+    /// Returns the piece at sq, if there is one.
+    pub fn get_idle_piece_at(&self, mask: u64) -> Option<Piece> {
+        if self.idle & mask == 0 {
+            None
+        } else {
+            Some(  if self.idle_pawns & mask != 0 {
+                Piece::Pawn
+            } else if self.idle_knights & mask != 0 {
+                Piece::Knight
+            } else if self.idle_bishops & mask != 0 {
+                Piece::Bishop
+            } else if self.idle_rooks & mask != 0 {
+                Piece::Rook
+            } else if self.idle_queens & mask != 0 {
                 Piece::Queen
             } else { // king
                 Piece::King
@@ -137,72 +165,83 @@ impl Board {
         }
     }
 
-    /// Returns the square index of the active king.
-    #[inline]
-    pub fn actv_king_sq(&self) -> u8 {
-        (self.kings & self.actv).trailing_zeros() as u8
+    fn is_tile_cvrd_actv(&self, sq: u8, all: u64) -> bool {
+        fend::knight_fend(sq) & self.actv_knights != 0
+        || fend::bishop_fend(sq, all) & (self.actv_bishops | self.actv_queens) != 0
+        || fend::rook_fend(sq, all) & (self.actv_rooks | self.actv_queens) != 0
+        || fend::pawn_fend_idle(sq) & self.actv_pawns != 0
+        || fend::king_fend(sq) & (1 << self.actv_king_sq) != 0
     }
-    /// Returns the square index of the idle king.
-    #[inline]
-    pub fn idle_king_sq(&self) -> u8 {
-        (self.kings & self.idle).trailing_zeros() as u8
+    fn is_tile_cvrd_idle(&self, sq: u8, all: u64) -> bool {
+        fend::knight_fend(sq) & self.idle_knights != 0
+        || fend::bishop_fend(sq, all) & (self.idle_bishops | self.idle_queens) != 0
+        || fend::rook_fend(sq, all) & (self.idle_rooks | self.idle_queens) != 0
+        || fend::pawn_fend_actv(sq) & self.idle_pawns != 0
+        || fend::king_fend(sq) & (1 << self.idle_king_sq) != 0
     }
 
+    #[inline]
     pub fn is_actv_in_check(&self) -> bool {
-        let sq = self.actv_king_sq();
-        fend::knight_fend(sq) & self.knights & self.idle != 0
-        || fend::bishop_fend(sq, self.all) & (self.bishops | self.queens) & self.idle != 0
-        || fend::rook_fend(sq, self.all) & (self.rooks | self.queens) & self.idle != 0
+        self.is_tile_cvrd_idle(self.actv_king_sq, self.all)
+    }
+    #[inline]
+    pub fn is_idle_in_check(&self) -> bool {
+        self.is_tile_cvrd_actv(self.idle_king_sq, self.all)
     }
 
-    pub fn is_idle_in_check(&self) -> bool {
-        let sq = self.idle_king_sq();
-        fend::knight_fend(sq) & self.knights & self.actv != 0
-        || fend::bishop_fend(sq, self.all) & (self.bishops | self.queens) & self.actv != 0
-        || fend::rook_fend(sq, self.all) & (self.rooks | self.queens) & self.actv != 0
+    /// Checks whether a generates pseudo-legal move is legal.
+    pub fn is_move_legal(&self, Move { from_sq, to_sq, piece }: Move) -> bool {
+        let king_sq = if let Piece::King = piece { to_sq } else { self.actv_king_sq };
+        !self.is_tile_cvrd_idle(king_sq, self.all & !(1 << from_sq) | (1 << to_sq))
+    }
+
+    #[inline]
+    fn flip(&mut self) {
+        self.colour = -self.colour;
+        
+        (self.actv_pawns, self.idle_pawns) = (self.idle_pawns.swap_bytes(), self.actv_pawns.swap_bytes());
+        (self.actv_knights, self.idle_knights) = (self.idle_knights.swap_bytes(), self.actv_knights.swap_bytes());
+        (self.actv_bishops, self.idle_bishops) = (self.idle_bishops.swap_bytes(), self.actv_bishops.swap_bytes());
+        (self.actv_rooks, self.idle_rooks) = (self.idle_rooks.swap_bytes(), self.actv_rooks.swap_bytes());
+        (self.actv_queens, self.idle_queens) = (self.idle_queens.swap_bytes(), self.actv_queens.swap_bytes());
+        (self.actv_king_sq, self.idle_king_sq) = (flip_sq(self.idle_king_sq), flip_sq(self.actv_king_sq));
+        (self.actv, self.idle) = (self.idle.swap_bytes(), self.actv.swap_bytes());
+        (self.actv_castle_flags, self.idle_castle_flags) = (self.idle_castle_flags, self.actv_castle_flags);
+
+        self.all = self.actv | self.idle;
+        self.hash ^= zobrist::COLOUR_HASH;
     }
 
 
     /// Play a move on the board, and flip the player turn.
     /// 
-    /// Note that legality is not checked, besides
-    /// ### Move details:
-    /// * `piece` indicated the type of piece moved, unless promoting
-    /// a pawn, for which it must be the piece being promoted to.
-    /// * `from` and `to` must be bitmasks of the tiles.
-    /// * Castling is performed strictly by moving the king two spaces
-    /// in a legal fashion, the rook movement is handled automatically.
-    /// * En passant is performed automatically.
-    /// 
-    /// ### Returns:
-    /// * `Err(())` - `idle` ends up in check (illegal move, drop self).
-    /// * `Ok(())` - `idle` is not in check.
-    /// This is an illegal move, and `self` should be dropped.
-    pub fn make(&mut self, Move { from_sq, to_sq, piece }: Move) -> Result<(), ()> {
-        self.fifty_move_clock += 1;
+    /// Note that legality is not checked.
+    pub fn make(&mut self, Move { from_sq, to_sq, piece }: Move) {
         let is_actv_white = self.colour == 1;
         let from = 1u64 << from_sq;
         let to = 1u64 << to_sq;
-
+        
+        self.fifty_move_clock += 1;
+        
         // handle capture
-        if let Some(cap) = self.get_piece_at(to) {
+        if let Some(cap) = self.get_idle_piece_at(to) {
             // remove piece & reset 50-move rule clock
             self.idle &= !to;
             self.fifty_move_clock = 0;
             self.hash ^= zobrist::get_piece_hash_idle(!is_actv_white, cap, to_sq);
             match cap {
-                Piece::Pawn => self.pawns &= !to,
-                Piece::Knight => self.knights &= !to,
-                Piece::Bishop => self.bishops &= !to,
-                Piece::Rook => self.rooks &= !to,
-                Piece::Queen => self.queens &= !to,
+                Piece::Pawn => self.idle_pawns &= !to,
+                Piece::Knight => self.idle_knights &= !to,
+                Piece::Bishop => self.idle_bishops &= !to,
+                Piece::Rook => self.idle_rooks &= !to,
+                Piece::Queen => self.idle_queens &= !to,
                 Piece::King => panic!("king captured!"),
             }
         } else {
             // check for en passant before assuming no capture
             if piece == Piece::Pawn && to == self.en_passant {
                 let cap = to >> 8;
-                self.pawns &= !cap;
+                self.idle_pawns &= !cap;
                 self.idle &= !cap;
                 self.fifty_move_clock = 0;
                 self.hash ^= zobrist::get_piece_hash_idle(
@@ -213,14 +252,11 @@ impl Board {
             }
         }
         
-        self.hash ^= zobrist::get_piece_hash_idle(is_actv_white, piece, from_sq);
-        self.hash ^= zobrist::get_piece_hash_idle(is_actv_white, piece, to_sq);
-        self.actv = self.actv & !from | to;
-        self.en_passant = 0;
+        self.en_passant = 0; // clear between potential read and write
 
         match piece {
             Piece::Pawn => {
-                self.pawns = self.pawns & !from | to;
+                self.actv_pawns = self.actv_pawns & !from | to;
                 // reset 50 move clock
                 self.fifty_move_clock = 0;
                 // double-advance: flag rear tile for en passant
@@ -228,60 +264,69 @@ impl Board {
                     // shift accounts for board flip
                     self.en_passant = from << 0o40;
                 }
-            },
-            Piece::Knight => self.knights = self.knights & !from | to,
-            Piece::Bishop => self.bishops = self.bishops & !from | to,
+            }
+            Piece::Knight => self.actv_knights = self.actv_knights & !from | to,
+            Piece::Bishop => self.actv_bishops = self.actv_bishops & !from | to,
+            Piece::Queen =>  self.actv_queens  = self.actv_queens  & !from | to,
             Piece::Rook => {
-                self.rooks = self.rooks & !from | to;
-                if from == 0x1 {
+                self.actv_rooks = self.actv_rooks & !from | to;
+                if from == 0o0 {
                     self.actv_castle_flags &= !CastleFlags::QUEENSIDE;
                     self.hash ^= zobrist::get_hash_qs_castle(is_actv_white);
-                }
-                if from == 0x80 {
+                } else if from == 0o7 {
                     self.actv_castle_flags &= !CastleFlags::KINGSIDE;
                     self.hash ^= zobrist::get_hash_ks_castle(is_actv_white);
                 }
-            }
-            Piece::Queen => self.queens = self.queens & !from | to,
+            },
             Piece::King => {
-                self.kings = self.kings & !from | to;
-                if from == to >> 2 { // kingside castle!
-                    self.rooks = self.rooks & !0x80 | 0x20;
-                } else if from == to << 2 { // queenside castle!
-                    self.rooks = self.rooks & !0x1 | 0x8;
+                self.actv_king_sq = to_sq;
+                if from_sq == to_sq - 2 { // kingside castle!
+                    self.actv_rooks = self.actv_rooks & !0x80 | 0x20;
+                    self.actv = self.actv & !0x80 | 0x20;
+                    self.hash ^= zobrist::get_piece_hash_actv(is_actv_white, Piece::Rook, 0o7);
+                    self.hash ^= zobrist::get_piece_hash_actv(is_actv_white, Piece::Rook, 0o5);
+                } else if from_sq == to_sq + 2 { // queenside castle!
+                    self.actv_rooks = self.actv_rooks & !0x1 | 0x8;
+                    self.actv = self.actv & !0x1 | 0x8;
+                    self.hash ^= zobrist::get_piece_hash_actv(is_actv_white, Piece::Rook, 0o0);
+                    self.hash ^= zobrist::get_piece_hash_actv(is_actv_white, Piece::Rook, 0o3);
+                }
+                if self.actv_castle_flags.contains(CastleFlags::KINGSIDE) {
+                    self.hash ^= zobrist::get_hash_ks_castle(is_actv_white);
+                }
+                if self.actv_castle_flags.contains(CastleFlags::QUEENSIDE) {
+                    self.hash ^= zobrist::get_hash_qs_castle(is_actv_white);
                 }
                 self.actv_castle_flags = CastleFlags::empty();
-                if self.actv_castle_flags.contains(CastleFlags::KINGSIDE) {
-                    self.hash ^= zobrist::get_hash_ks_castle(is_actv_white);
-                }
-                if self.actv_castle_flags.contains(CastleFlags::KINGSIDE) {
-                    self.hash ^= zobrist::get_hash_ks_castle(is_actv_white);
-                }
             }
         }
-
-        // handle pawn promotions
-        self.pawns &= !from;
+        
+        // update actv
+        self.actv = self.actv & !from | to;
+        // update hash & handle pawn promotions
+        if self.actv_pawns & from != 0 {
+            self.actv_pawns &= !from;
+            self.hash ^= zobrist::get_piece_hash_idle(is_actv_white, Piece::Pawn, from_sq);
+        } else {
+            self.hash ^= zobrist::get_piece_hash_idle(is_actv_white, piece, from_sq);
+        }
+        self.hash ^= zobrist::get_piece_hash_idle(is_actv_white, piece, to_sq);
 
         // bookkeeping
-        self.colour = -self.colour;
-        self.move_count += (self.colour + 1 >> 1) as usize;
-        swap(&mut self.actv, &mut self.idle);
-        swap(&mut self.actv_castle_flags, &mut self.idle_castle_flags);
-        self.pawns = self.pawns.swap_bytes();
-        self.knights = self.knights.swap_bytes();
-        self.bishops = self.bishops.swap_bytes();
-        self.rooks = self.rooks.swap_bytes();
-        self.queens = self.queens.swap_bytes();
-        self.kings = self.kings.swap_bytes();
-        self.actv = self.actv.swap_bytes();
-        self.idle = self.idle.swap_bytes();
+        self.flip();
+        self.move_count += (self.colour + 1) as u16 >> 1;
+    }
 
-        self.all = self.actv | self.idle;
-        self.hash ^= zobrist::COLOUR_HASH;
+    pub fn unmake(&mut self) {
 
-        // if idle is in check, move is illegal
-        if self.is_idle_in_check() { Err(()) } else { Ok(()) }
+    }
+
+
+    /// Play a null move and flip the player turn.
+    pub fn make_null(&mut self) {
+        self.flip();
+        self.fifty_move_clock += 1;
+        self.move_count += (self.colour + 1) as u16 >> 1;
     }
 
     /// Check for stalemate and checkmate.
@@ -290,20 +335,16 @@ impl Board {
         self.get_moveset_actv(&mut move_table);
         
         // if any move avoids check, no mate
+        // `make` does not mutate state unless a legal move is successfully 
+        // played, thus it need only be fixme todo
         for set in move_table.get_move_sets() {
             for mov in set.iter() {
-                let mut board = self.clone();
-                if let Ok(_) = board.make(mov) {
-                    return None;
-                }
+                if self.is_move_legal(mov) { return None; }
             }
         }
         for set in move_table.get_prom_sets() {
             for pro in set.iter() {
-                let mut board = self.clone();
-                if let Ok(_) = board.make(pro) {
-                    return None;
-                }
+                if self.is_move_legal(pro) { return None; }
             }
         }
 
@@ -323,18 +364,18 @@ impl Board {
         }
         
         // insufficient material
-        if self.pawns | self.rooks | self.queens == 0 {
-            let minors = self.knights | self.bishops;
-            let actv_minor_thresh = (self.actv & minors).count_ones() <= 1;
-            let idle_minor_thresh = (self.idle & minors).count_ones() <= 1;
+        if self.actv_pawns | self.idle_pawns | self.actv_rooks | self.idle_rooks | self.actv_queens | self.idle_queens == 0 {
+            let actv_minor_thresh = (self.actv_bishops | self.actv_knights).count_ones() <= 1;
+            let idle_minor_thresh = (self.idle_bishops | self.idle_knights).count_ones() <= 1;
             
             if actv_minor_thresh && idle_minor_thresh {
                 // kx v kx, where x is a minor piece or nothing
                 return Some(GameOver::InsMaterial);
             } else if actv_minor_thresh || idle_minor_thresh {
-                if self.bishops == 0 && self.knights == 2 {
-                    // knn v k
-                    return Some(GameOver::InsMaterial);
+                if self.actv_bishops == 0 && self.idle_bishops == 0 {
+                    if (self.actv_knights == 2) ^ (self.idle_knights == 2) {
+                        return Some(GameOver::InsMaterial); // knn v k
+                    }
                 }
             }
         }
@@ -351,26 +392,57 @@ impl Board {
     }
 
     
+    /// Check whether the `actv` king would be kingside castling through check.
+    #[inline]
+    fn can_kingside_castle(&self) -> bool {
+        let idle_strt = self.idle_rooks | self.idle_queens;
+        let idle_diag = self.idle_bishops | self.idle_queens;
+        0xF8DC00 & self.idle_knights == 0
+        && fend::bishop_fend(4, self.all) & idle_diag == 0
+        && fend::bishop_fend(5, self.all) & idle_diag == 0
+        && fend::bishop_fend(6, self.all) & idle_diag == 0
+        && fend::rook_fend(4, self.all) & idle_strt == 0
+        && fend::rook_fend(5, self.all) & idle_strt == 0
+        && fend::rook_fend(6, self.all) & idle_strt == 0
+        && 0xF800 & self.idle_pawns == 0
+        && 0xF8F8 & (1u64 << self.idle_king_sq) == 0
+    }
+    /// Check whether the `actv` king would be queenside castling through check.
+    #[inline]
+    fn can_queenside_castle(&self) -> bool {
+        let idle_strt = self.idle_rooks | self.idle_queens;
+        let idle_diag = self.idle_bishops | self.idle_queens;
+        0x3E7700 & self.idle_knights == 0
+        && fend::bishop_fend(4, self.all) & idle_diag == 0
+        && fend::bishop_fend(3, self.all) & idle_diag == 0
+        && fend::bishop_fend(2, self.all) & idle_diag == 0
+        && fend::rook_fend(4, self.all) & idle_strt == 0
+        && fend::rook_fend(3, self.all) & idle_strt == 0
+        && fend::rook_fend(2, self.all) & idle_strt == 0
+        && 0x3E00 & self.idle_pawns == 0
+        && 0x3E3E & (1u64 << self.idle_king_sq) == 0
+    }
+    
     /// Computes the bitmap of 'covered' tiles by `actv`.
     pub fn calc_actv_fend(&self) -> u64 {
         let mut fend = 0;
-        fend |= fend::pawns_fend_actv(self.pawns & self.actv);
-        fend |= fend::knights_fend(self.knights & self.actv);
-        fend |= fend::bishops_fend(self.bishops & self.actv, self.all);
-        fend |= fend::rooks_fend(self.rooks & self.actv, self.all);
-        fend |= fend::queens_fend(self.queens & self.actv, self.all);
-        fend |= fend::king_fend(self.actv_king_sq());
+        fend |= fend::pawns_fend_actv(self.actv_pawns);
+        fend |= fend::knights_fend(self.actv_knights);
+        fend |= fend::bishops_fend(self.actv_bishops, self.all);
+        fend |= fend::rooks_fend(self.actv_rooks, self.all);
+        fend |= fend::queens_fend(self.actv_queens, self.all);
+        fend |= fend::king_fend(self.actv_king_sq);
         fend
     }
     /// Computes the bitmap of 'covered' tiles by `idle`.
     pub fn calc_idle_fend(&mut self) -> u64 {
         let mut fend = 0;
-        fend |= fend::pawns_fend_idle(self.pawns & self.idle);
-        fend |= fend::knights_fend(self.knights & self.idle);
-        fend |= fend::bishops_fend(self.bishops & self.idle, self.all);
-        fend |= fend::rooks_fend(self.rooks & self.idle, self.all);
-        fend |= fend::queens_fend(self.queens & self.idle, self.all);
-        fend |= fend::king_fend(self.idle_king_sq()); 
+        fend |= fend::pawns_fend_idle(self.idle_pawns);
+        fend |= fend::knights_fend(self.idle_knights);
+        fend |= fend::bishops_fend(self.idle_bishops, self.all);
+        fend |= fend::rooks_fend(self.idle_rooks, self.all);
+        fend |= fend::queens_fend(self.idle_queens, self.all);
+        fend |= fend::king_fend(self.idle_king_sq); 
         fend
     }
 }

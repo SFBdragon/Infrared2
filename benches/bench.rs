@@ -20,14 +20,24 @@ fn bench_board_methods(c: &mut Criterion) {
         board.get_moveset_actv(&mut sets);
         for ss in sets.get_move_sets() {
             for mov in ss.iter() {
-                let mut board = board;
-                let x = board.make(mov);
+                if board.is_move_legal(mov) {
+                    let mut board = board;
+                    board.make(mov);
+                    let x = black_box(&mut board);
+                } else {
+                    panic!();
+                }
             }
         }
         for ss in sets.get_prom_sets() {
             for prom in ss.iter() {
-                let mut board = board;
-                let x = board.make(prom);
+                if board.is_move_legal(prom) {
+                    let mut board = board;
+                    board.make(prom);
+                    let x = black_box(&mut board);
+                } else {
+                    panic!();
+                }
             }
         }
     }));
@@ -37,6 +47,10 @@ fn bench_board_methods(c: &mut Criterion) {
     }));
     c.bench_function("is_actv_in_check", |b| b.iter(|| {
         let x = board.is_actv_in_check();
+        //assert!(!x);
+    }));
+    c.bench_function("calc_actv_fend", |b| b.iter(|| {
+        let x = board.calc_actv_fend();
         //assert!(!x);
     }));
 }
