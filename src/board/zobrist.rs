@@ -125,18 +125,42 @@ impl Board {
             hash ^= get_hash_qs_castle(!is_actv_white);
         }
 
-        for_sq!(sq in self.actv_pawns => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Pawn, sq) });
-        for_sq!(sq in self.idle_pawns => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Pawn, sq) });
-        for_sq!(sq in self.actv_knights => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Knight, sq) });
-        for_sq!(sq in self.idle_knights => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Knight, sq) });
-        for_sq!(sq in self.actv_bishops => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Bishop, sq) });
-        for_sq!(sq in self.idle_bishops => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Bishop, sq) });
-        for_sq!(sq in self.actv_rooks => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Rook, sq) });
-        for_sq!(sq in self.idle_rooks => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Rook, sq) });
-        for_sq!(sq in self.actv_queens => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Queen, sq) });
-        for_sq!(sq in self.idle_queens => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Queen, sq) });
-        hash ^= get_piece_hash_actv(is_actv_white, Piece::King, self.actv_king_sq);
-        hash ^= get_piece_hash_idle(!is_actv_white, Piece::King, self.idle_king_sq);
+        for_sq!(sq in self.pawns & self.actv => {
+            hash ^= get_piece_hash_actv(is_actv_white, Piece::Pawn, sq);
+        });
+        for_sq!(sq in self.pawns & self.idle => {
+            hash ^= get_piece_hash_idle(!is_actv_white, Piece::Pawn, sq);
+        });
+        for_sq!(sq in self.knights & self.actv => {
+            hash ^= get_piece_hash_actv(is_actv_white, Piece::Knight, sq);
+        });
+        for_sq!(sq in self.knights & self.idle => {
+            hash ^= get_piece_hash_idle(!is_actv_white, Piece::Knight, sq);
+        });
+        for_sq!(sq in self.bishops & self.actv => {
+            hash ^= get_piece_hash_actv(is_actv_white, Piece::Bishop, sq);
+        });
+        for_sq!(sq in self.bishops & self.idle => {
+            hash ^= get_piece_hash_idle(!is_actv_white, Piece::Bishop, sq);
+        });
+        for_sq!(sq in self.rooks & self.actv => {
+            hash ^= get_piece_hash_actv(is_actv_white, Piece::Rook, sq); 
+        });
+        for_sq!(sq in self.rooks & self.idle => {
+            hash ^= get_piece_hash_idle(!is_actv_white, Piece::Rook, sq);
+        });
+        for_sq!(sq in self.queens & self.actv => {
+            hash ^= get_piece_hash_actv(is_actv_white, Piece::Queen, sq);
+        });
+        for_sq!(sq in self.queens & self.idle => {
+            hash ^= get_piece_hash_idle(!is_actv_white, Piece::Queen, sq);
+        });
+        for_sq!(sq in self.kings & self.actv => {
+            hash ^= get_piece_hash_actv(is_actv_white, Piece::King, sq);
+        });
+        for_sq!(sq in self.kings & self.idle => {
+            hash ^= get_piece_hash_idle(!is_actv_white, Piece::King, sq);
+        });
 
         self.hash = hash;
     }

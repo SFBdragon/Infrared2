@@ -1,7 +1,5 @@
 //! Chess board and move string coding and conversion.
 
-use core::panic;
-
 use super::{Piece, Board};
 
 
@@ -120,18 +118,12 @@ impl Board {
             all: 0,
             actv: 0,
             idle: 0,
-            actv_pawns: 0,
-            actv_bishops: 0,
-            actv_knights: 0,
-            actv_rooks: 0,
-            actv_queens: 0,
-            actv_king_sq: 0,
-            idle_pawns: 0,
-            idle_bishops: 0,
-            idle_knights: 0,
-            idle_rooks: 0,
-            idle_queens: 0,
-            idle_king_sq: 0,
+            pawns: 0,
+            bishops: 0,
+            knights: 0,
+            rooks: 0,
+            queens: 0,
+            kings: 0,
             en_passant: 0,
             move_count: move_count.parse::<u16>().map_err(|_| ())?,
             colour: 1,
@@ -172,29 +164,21 @@ impl Board {
                     board.idle |= 1 << sq;
                 }
                 
-                match c {
-                    'P' => board.actv_pawns |= 1 << sq,
-                    'N' => board.actv_knights |= 1 << sq,
-                    'B' => board.actv_bishops |= 1 << sq,
-                    'R' => board.actv_rooks |= 1 << sq,
-                    'Q' => board.actv_queens |= 1 << sq,
-                    'K' => board.actv_king_sq = sq as u8,
-
-                    'p' => board.idle_pawns |= 1 << sq,
-                    'n' => board.idle_knights |= 1 << sq,
-                    'b' => board.idle_bishops |= 1 << sq,
-                    'r' => board.idle_rooks |= 1 << sq,
-                    'q' => board.idle_queens |= 1 << sq,
-                    'k' => board.idle_king_sq = sq as u8,
-
+                match c.to_lowercase().next().ok_or(())? {
+                    'p' => board.pawns |= 1 << sq,
+                    'n' => board.knights |= 1 << sq,
+                    'b' => board.bishops |= 1 << sq,
+                    'r' => board.rooks |= 1 << sq,
+                    'q' => board.queens |= 1 << sq,
+                    'k' => board.kings |= 1 << sq,
                     _ => return Err(()),
                 }
                 sq += 1;
             }
         }
-        
+
         board.all = board.actv | board.idle;
-        
+
         // board init up until this point assumes white is actv
         // if this is wrong, flip the board
         match colour {
@@ -229,27 +213,20 @@ impl Board {
                     }
                 }
 
-                let c = if let Some(piece) = board.get_actv_piece_at(mask) {
-                    match piece {
-                        Piece::King =>   'K',
-                        Piece::Queen =>  'Q',
-                        Piece::Rook =>   'R',
-                        Piece::Bishop => 'B',
-                        Piece::Knight => 'N',
-                        Piece::Pawn =>   'P',
-                    }
-                } else if let Some(piece) = board.get_idle_piece_at(mask) {
-                    match piece {
-                        Piece::King =>   'k',
-                        Piece::Queen =>  'q',
-                        Piece::Rook =>   'r',
-                        Piece::Bishop => 'b',
-                        Piece::Knight => 'n',
-                        Piece::Pawn =>   'p',
-                    }
-                } else { panic!() };
+                let c = match board.get_piece_at(mask).unwrap() {
+                    Piece::King =>   'k',
+                    Piece::Queen =>  'q',
+                    Piece::Rook =>   'r',
+                    Piece::Bishop => 'b',
+                    Piece::Knight => 'n',
+                    Piece::Pawn =>   'p',
+                };
 
-                rank_str.push(c);
+                if board.actv & mask != 0 {
+                    rank_str.push(c.to_ascii_uppercase())
+                } else {
+                    rank_str.push(c)
+                }
             }
 
             if blank_count > 0 {
@@ -304,7 +281,6 @@ mod tests {
         let fen2 = "R7/6k1/8/8/P6P/6K1/8/4r3 b - - 0 1";
 
         assert_eq!(Board::START_POS_FEN, crate::board::Board::from_fen(Board::START_POS_FEN).unwrap().to_fen());
-        dbg!(crate::board::Board::from_fen(fen1).unwrap());
         assert_eq!(fen1, crate::board::Board::from_fen(fen1).unwrap().to_fen());
         assert_eq!(fen2, crate::board::Board::from_fen(fen2).unwrap().to_fen());
     }

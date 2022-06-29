@@ -101,13 +101,25 @@ impl Board {
 
     /// Provides illegal moves wrt checking.
     pub fn get_moveset_actv(&self, tab: &mut MoveSetTable) {
-        for_sq!(sq in self.actv_pawns & 0x00FF000000000000 => { tab.push_prom(self.pawn_proms_actv(sq)) });
-        for_sq!(sq in self.actv_pawns & !0x00FF000000000000 => { tab.push(self.pawn_moves_actv(sq)) });
-        for_sq!(sq in self.actv_knights => { tab.push(self.knight_moves_actv(sq)) });
-        for_sq!(sq in self.actv_bishops => { tab.push(self.bishop_moves_actv(sq)) });
-        for_sq!(sq in self.actv_rooks => { tab.push(self.rook_moves_actv(sq)) });
-        for_sq!(sq in self.actv_queens => { tab.push(self.queen_moves_actv(sq)) });
-        tab.push(self.king_moves_actv(self.actv_king_sq));
+        for_sq!(sq in self.pawns & self.actv & 0x00FF000000000000 => {
+            tab.push_prom(self.pawn_proms_actv(sq));
+        });
+        for_sq!(sq in self.pawns & self.actv & !0x00FF000000000000 => {
+            tab.push(self.pawn_moves_actv(sq));
+        });
+        for_sq!(sq in self.knights & self.actv => {
+            tab.push(self.knight_moves_actv(sq));
+        });
+        for_sq!(sq in self.bishops & self.actv => {
+            tab.push(self.bishop_moves_actv(sq));
+        });
+        for_sq!(sq in self.rooks & self.actv => {
+            tab.push(self.rook_moves_actv(sq));
+        });
+        for_sq!(sq in self.queens & self.actv => {
+            tab.push(self.queen_moves_actv(sq));
+        });
+        tab.push(self.king_moves_actv(self.actv_king_sq()));
     }
 }
 
