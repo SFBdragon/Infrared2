@@ -1,29 +1,9 @@
 //! Zobrist hashing for transposition tables & 3 position repetition.
 
-use std::hash::Hasher;
+use std::collections::HashMap;
 
 use crate::for_sq;
-
-use super::{CastleFlags, Piece, Board};
-
-
-
-
-pub struct U64IdentHasher {
-    hash: u64,
-}
-impl Hasher for U64IdentHasher {
-    fn finish(&self) -> u64 {
-        self.hash
-    }
-    fn write_u64(&mut self, i: u64) {
-        self.hash = i;
-    }
-
-    fn write(&mut self, _bytes: &[u8]) {
-        panic!("Hasher intended for u64 only.");
-    }
-}
+use super::{CastleRights, Piece, Board};
 
 
 /// https://www.chessprogramming.org/Bob_Jenkins#RKISS - oxidised
@@ -56,7 +36,7 @@ const fn rkiss_init(seed: u64) -> [u64; 4] {
 /// Pseudo Random Numbers
 const PRNS: [u64; 781] = {
     let mut numbers = [0u64; 781];
-    let mut state = rkiss_init(0xa9087b6a09b67);
+    let mut state = rkiss_init(0x71441EA136508DD9);
     let mut i = 0;
     while i < numbers.len() {
         state = rkiss(state);
@@ -102,7 +82,7 @@ pub const COLOUR_HASH: u64 = PRNS[COLOUR_OFFSET];
 
 
 impl Board {
-    pub fn init_hash(&mut self) {
+    pub fn calc_hash(&self) -> u64 {
         let mut hash = 0;
         let is_actv_white = self.colour == 1;
         
@@ -112,56 +92,73 @@ impl Board {
 
         hash ^= get_hash_en_passant(self.en_passant);
 
-        if self.actv_castle_flags.contains(CastleFlags::KINGSIDE) {
-            hash ^= get_hash_ks_castle(is_actv_white);
-        }
-        if self.actv_castle_flags.contains(CastleFlags::QUEENSIDE) {
-            hash ^= get_hash_qs_castle(is_actv_white);
-        }
-        if self.idle_castle_flags.contains(CastleFlags::KINGSIDE) {
-            hash ^= get_hash_ks_castle(!is_actv_white);
-        }
-        if self.idle_castle_flags.contains(CastleFlags::QUEENSIDE) {
-            hash ^= get_hash_qs_castle(!is_actv_white);
-        }
+        if self.actv_castle_rights.contains(CastleRights::KINGSIDE)  { hash ^= get_hash_ks_castle(is_actv_white); }
+        if self.actv_castle_rights.contains(CastleRights::QUEENSIDE) { hash ^= get_hash_qs_castle(is_actv_white); }
+        if self.idle_castle_rights.contains(CastleRights::KINGSIDE)  { hash ^= get_hash_ks_castle(!is_actv_white); }
+        if self.idle_castle_rights.contains(CastleRights::QUEENSIDE) { hash ^= get_hash_qs_castle(!is_actv_white); }
 
-        for_sq!(sq in self.pawns & self.actv => {
-            hash ^= get_piece_hash_actv(is_actv_white, Piece::Pawn, sq);
-        });
-        for_sq!(sq in self.pawns & self.idle => {
-            hash ^= get_piece_hash_idle(!is_actv_white, Piece::Pawn, sq);
-        });
-        for_sq!(sq in self.knights & self.actv => {
-            hash ^= get_piece_hash_actv(is_actv_white, Piece::Knight, sq);
-        });
-        for_sq!(sq in self.knights & self.idle => {
-            hash ^= get_piece_hash_idle(!is_actv_white, Piece::Knight, sq);
-        });
-        for_sq!(sq in self.bishops & self.actv => {
-            hash ^= get_piece_hash_actv(is_actv_white, Piece::Bishop, sq);
-        });
-        for_sq!(sq in self.bishops & self.idle => {
-            hash ^= get_piece_hash_idle(!is_actv_white, Piece::Bishop, sq);
-        });
-        for_sq!(sq in self.rooks & self.actv => {
-            hash ^= get_piece_hash_actv(is_actv_white, Piece::Rook, sq); 
-        });
-        for_sq!(sq in self.rooks & self.idle => {
-            hash ^= get_piece_hash_idle(!is_actv_white, Piece::Rook, sq);
-        });
-        for_sq!(sq in self.queens & self.actv => {
-            hash ^= get_piece_hash_actv(is_actv_white, Piece::Queen, sq);
-        });
-        for_sq!(sq in self.queens & self.idle => {
-            hash ^= get_piece_hash_idle(!is_actv_white, Piece::Queen, sq);
-        });
-        for_sq!(sq in self.kings & self.actv => {
-            hash ^= get_piece_hash_actv(is_actv_white, Piece::King, sq);
-        });
-        for_sq!(sq in self.kings & self.idle => {
-            hash ^= get_piece_hash_idle(!is_actv_white, Piece::King, sq);
-        });
+        for_sq!(sq in self.pawns & self.actv => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Pawn, sq); });
+        for_sq!(sq in self.pawns & self.idle => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Pawn, sq); });
+        for_sq!(sq in self.knights & self.actv => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Knight, sq); });
+        for_sq!(sq in self.knights & self.idle => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Knight, sq); });
+        for_sq!(sq in self.bishops & self.actv => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Bishop, sq); });
+        for_sq!(sq in self.bishops & self.idle => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Bishop, sq); });
+        for_sq!(sq in self.rooks & self.actv => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Rook, sq); });
+        for_sq!(sq in self.rooks & self.idle => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Rook, sq); });
+        for_sq!(sq in self.queens & self.actv => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Queen, sq); });
+        for_sq!(sq in self.queens & self.idle => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Queen, sq); });
+        hash ^= get_piece_hash_actv(is_actv_white, Piece::King, self.actv_king_sq);
+        hash ^= get_piece_hash_idle(!is_actv_white, Piece::King, self.idle_king_sq);
 
-        self.hash = hash;
+        hash
     }
+}
+
+pub struct U64IdentHasher {
+    hash: u64,
+}
+impl std::hash::Hasher for U64IdentHasher {
+    fn finish(&self) -> u64 {
+        self.hash
+    }
+
+    fn write(&mut self, _bytes: &[u8]) {
+        panic!("not a generic hasher!");
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.hash = i;
+    }
+}
+
+pub struct U64IdentHashBuilder;
+impl std::hash::BuildHasher for U64IdentHashBuilder {
+    type Hasher = U64IdentHasher;
+
+    fn build_hasher(&self) -> Self::Hasher {
+        U64IdentHasher { hash: 0 }
+    }
+}
+
+/// A type to store previous positions' hashes within an exploration.
+pub struct PosHashNode<'a> {
+    pub hash: u64,
+    pub prev: Option<&'a PosHashNode<'a>>,
+    pub prev_prev: Option<&'a PosHashNode<'a>>,
+}
+impl<'a> PosHashNode<'a> {
+    pub fn new(hash: u64, prev: Option<&'a PosHashNode>) -> Self {
+        Self { hash, prev, prev_prev: prev.and_then(|p| p.prev) }
+    }
+}
+
+/// A type to store previous positions' hashes across a game.
+/// 
+/// With the map's value indicating the number of times a position has occured.
+pub type PosHashMap = HashMap<u64, u8, U64IdentHashBuilder>;
+
+/// Check if a position exists within `map` at least two times.
+pub fn threefold_repetition(map: &PosHashMap, hash: u64) -> bool {
+    map.get(&hash).map_or(false, |&count| count >= 2)
 }

@@ -1,4 +1,12 @@
 
+
+fn main() {
+    gen_magics(true);
+    gen_magics(false);
+}
+
+
+
 fn bishop_shadow(sq: u8) -> u64 {
     let mut msk = 0u64;
     let file = sq % 8;
@@ -78,8 +86,6 @@ fn rook_fend(sq: u8, all: u64) -> u64 {
 }
 
 
-
-#[allow(unused)]
 pub fn gen_magics(rook_else_bishop: bool) {
     // (offset, mask, magic, shift)
     let mut magic_data = Vec::<(usize, u64, u64, u32)>::with_capacity(64);
@@ -129,4 +135,5 @@ pub fn gen_magics(rook_else_bishop: bool) {
 
     println!("{:#x?}", magic_data);
 }
+
 

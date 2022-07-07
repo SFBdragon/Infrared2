@@ -206,3 +206,61 @@ pub fn unmake(&mut self, from: u64, to: u64, piece: Piece, data: UnmakeData) {
         self.ninc = data.ninc;
         self.all = self.actv | self.idle;
     }
+
+
+pub struct PureCoordMove {
+    pub from: u8,
+    pub to: u8,
+    pub promotion: Option<Piece>,
+}
+
+impl PureCoordMove {
+    /// Convert from pure coordinate notation.
+    /// ### Panics:
+    /// Panics when `coord` byte length is not 4 or 5.
+    pub fn from_pure_coord(coord: &str) -> Option<Self> {
+        let from = alg_pos_to_sq(&coord[0..2])?;
+        let to = alg_pos_to_sq(&coord[2..4])?;
+        
+        match coord.len() {
+            4 => Some(Self { from, to, promotion: None }),
+            5 => {
+                let promo = match coord.as_bytes()[5] {
+                    b'q' => Piece::Queen,
+                    b'n' => Piece::Knight,
+                    b'r' => Piece::Rook,
+                    b'b' => Piece::Bishop,
+                    _ => return None,
+                };
+
+                Some(Self { from, to, promotion: Some(promo) })
+            },
+            _ => panic!("Invalid coord argument length."),
+        }
+    }
+
+    /// Convert to pure coordinate notation.
+    pub fn to_pure_coord(&self) -> String {
+        match self.promotion {
+            Some(promo) => {
+                let mut alg_pos = String::with_capacity(4);
+                alg_pos.push_str(sq_to_alg_pos(self.from).as_str());
+                alg_pos.push_str(sq_to_alg_pos(self.to).as_str());
+                alg_pos.push(match promo {
+                    Piece::Knight => 'n',
+                    Piece::Bishop => 'b',
+                    Piece::Rook => 'r',
+                    Piece::Queen => 'q',
+                    _ => panic!("Invalid promotion piece."),
+                });
+                alg_pos
+            },
+            None => {
+                let mut alg_pos = String::with_capacity(4);
+                alg_pos.push_str(sq_to_alg_pos(self.from).as_str());
+                alg_pos.push_str(sq_to_alg_pos(self.to).as_str());
+                alg_pos
+            },
+        }
+    }
+}

@@ -1,43 +1,17 @@
-use std::mem::swap;
+use crate::for_mov;
 
 pub mod fend;
 pub mod mov;
-pub mod serde;
+pub mod fen;
 pub mod zobrist;
 
-
-/// Loop through the index of each set bit from least to most significant.
-#[macro_export]
-macro_rules! for_sq {
-    ($sq:ident in $bb:expr => $blk:block) => {
-        let mut t = $bb;
-        while t != 0 {
-            let $sq = t.trailing_zeros() as u8;
-            { $blk }
-            t &= t - 1; // blsr usually isn't any faster
-        }
-    }
-}
-/* /// Loop through each set bit from least to most significant.
-#[macro_export]
-macro_rules! for_msk {
-    ($msk:ident in $bb:expr => $blk:block) => {
-        let mut t = $bb;
-        while t != 0 {
-            let ts1 = t - 1;
-            let $msk = t & !ts1;
-            { $blk }
-            t &= ts1;
-        }
-    }
-} */
 
 /// Flip the rank of a chess square index.
 pub const fn flip_sq(sq: u8) -> u8 {
     sq ^ 0o70
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Move {
     pub from_sq: u8,
     pub to_sq: u8,
@@ -46,6 +20,15 @@ pub struct Move {
 impl Move {
     pub fn new(from_sq: u8, to_sq: u8, piece: Piece) -> Self {
         Self { from_sq, to_sq, piece }
+    }
+}
+impl std::fmt::Debug for Move {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Move")
+            .field("from_sq", &format_args!("{:#o}", self.from_sq))
+            .field("to_sq", &format_args!("{:#o}", self.to_sq))
+            .field("piece", &self.piece)
+            .finish()
     }
 }
 
@@ -71,7 +54,7 @@ pub enum GameOver {
 
 bitflags::bitflags! {
     /// Castle capabilities.
-    pub struct CastleFlags: u8 {
+    pub struct CastleRights: u8 {
         /// Indicates ability to kingside castle.
         const KINGSIDE = 1 << 0;
         /// Indicates ability to queenside castle.
@@ -80,9 +63,8 @@ bitflags::bitflags! {
 }
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Board {
-
     /// Bitboard of all pieces.
     pub all: u64,
     /// Bitboard of the pieces of the colour to move.
@@ -90,34 +72,33 @@ pub struct Board {
     /// Bitboard of the pieces of the colour that moved.
     pub idle: u64,
 
-    // todo split actv/idle
     pub pawns: u64,
     pub bishops: u64,
     pub knights: u64,
     pub rooks: u64,
     pub queens: u64,
-    pub kings: u64,
+    pub actv_king_sq: u8,
+    pub idle_king_sq: u8,
 
-    /// Move count since game begin.
-    pub move_count: u16,
-    /// `1` is white, `-1` is black.
-    pub colour: i8,
-    
     /// Bitboard of the square behind `prev` pawn double-advance. Else zero.
     pub en_passant: u64,
     /// Zobrist hash.
     pub hash: u64,
 
+    /// Move count since game begin.
+    pub move_count: u16,
     /// Count plies to 100 since the last capture or pawn-advance.
     pub fifty_move_clock: u16,
+    /// `1` is white, `-1` is black.
+    pub colour: i8,
     /// `next`'s castling capabilities.
-    pub actv_castle_flags: CastleFlags,
+    pub actv_castle_rights: CastleRights,
     /// `prev`'s castling capabilities.
-    pub idle_castle_flags: CastleFlags,
+    pub idle_castle_rights: CastleRights,
 }
 
 
-#[derive(Debug, Clone, Copy)]
+/* #[derive(Debug, Clone, Copy)]
 pub enum Capture {
     Normal(Piece),
     EnPassant,
@@ -139,10 +120,10 @@ pub struct Unmake {
     pub actv_castle_flags: CastleFlags,
     /// `prev`'s castling capabilities.
     pub idle_castle_flags: CastleFlags,
-}
+} */
 
 impl Board {
-    /// Returns the piece at sq and whether it is `actv`'s or not, if there is one.
+    /// Returns the piece at sq, if there is one.
     pub fn get_piece_at(&self, mask: u64) -> Option<Piece> {
         if self.all & mask == 0 {
             None
@@ -163,60 +144,52 @@ impl Board {
         }
     }
 
-    /// Returns the square index of the active king.
-    #[inline]
-    pub fn actv_king_sq(&self) -> u8 {
-        (self.kings & self.actv).trailing_zeros() as u8
+    fn is_tile_cvrd_actv(&self, sq: u8, all: u64, actv: u64) -> bool {
+        fend::knight_fend(sq) & self.knights & actv != 0
+        || fend::bishop_fend(sq, all) & (self.bishops | self.queens) & actv != 0
+        || fend::rook_fend(sq, all) & (self.rooks | self.queens) & actv != 0
+        || fend::pawn_fend_idle(sq) & self.pawns & actv != 0
+        || fend::king_fend(sq) & (1 << self.actv_king_sq) != 0
     }
-    /// Returns the square index of the idle king.
-    #[inline]
-    pub fn idle_king_sq(&self) -> u8 {
-        (self.kings & self.idle).trailing_zeros() as u8
-    }
-
-    fn is_tile_cvrd_actv(&self, sq: u8, all: u64) -> bool {
-        fend::knight_fend(sq) & self.knights & self.actv != 0
-        || fend::bishop_fend(sq, all) & (self.bishops | self.queens) & self.actv != 0
-        || fend::rook_fend(sq, all) & (self.rooks | self.queens) & self.actv != 0
-        || fend::pawn_fend_idle(sq) & self.pawns & self.actv != 0
-        || fend::king_fend(sq) & self.kings & self.actv != 0
-    }
-    fn is_tile_cvrd_idle(&self, sq: u8, all: u64) -> bool {
-        fend::knight_fend(sq) & self.knights & self.idle != 0
-        || fend::bishop_fend(sq, all) & (self.bishops | self.queens) & self.idle != 0
-        || fend::rook_fend(sq, all) & (self.rooks | self.queens) & self.idle != 0
-        || fend::pawn_fend_actv(sq) & self.pawns & self.idle != 0
-        || fend::king_fend(sq) & self.kings & self.idle != 0
+    fn is_tile_cvrd_idle(&self, sq: u8, all: u64, idle: u64) -> bool {
+        fend::knight_fend(sq) & self.knights & idle != 0
+        || fend::bishop_fend(sq, all) & (self.bishops | self.queens) & idle != 0
+        || fend::rook_fend(sq, all) & (self.rooks | self.queens) & idle != 0
+        || fend::pawn_fend_actv(sq) & self.pawns & idle != 0
+        || fend::king_fend(sq) & (1 << self.idle_king_sq) != 0
     }
 
     #[inline]
     pub fn is_actv_in_check(&self) -> bool {
-        self.is_tile_cvrd_idle(self.actv_king_sq(), self.all)
+        self.is_tile_cvrd_idle(self.actv_king_sq, self.all, self.idle)
     }
+    /// If this ever returns true, this is a bug.
     #[inline]
     pub fn is_idle_in_check(&self) -> bool {
-        self.is_tile_cvrd_actv(self.idle_king_sq(), self.all)
+        self.is_tile_cvrd_actv(self.idle_king_sq, self.all, self.actv)
     }
 
     /// Checks whether a generates pseudo-legal move is legal.
     pub fn is_move_legal(&self, Move { from_sq, to_sq, piece }: Move) -> bool {
-        let king_sq = if let Piece::King = piece { to_sq } else { self.actv_king_sq() };
-        !self.is_tile_cvrd_idle(king_sq, self.all & !(1 << from_sq) | (1 << to_sq))
+        let king_sq = if let Piece::King = piece { to_sq } else { self.actv_king_sq };
+        let (from, to) = (1 << from_sq, 1 << to_sq);
+        let ep = if to & self.en_passant != 0 && piece == Piece::Pawn { to >> 0o10 } else { 0 }; // en passant
+        !self.is_tile_cvrd_idle(king_sq, self.all & !from & !ep | to, self.idle & !to & !ep) // move & capture
     }
 
+    /// Flip the board. Does not update move counters.
     #[inline]
-    fn flip(&mut self) {
+    pub fn flip(&mut self) {
         self.colour = -self.colour;
-        swap(&mut self.actv, &mut self.idle);
-        swap(&mut self.actv_castle_flags, &mut self.idle_castle_flags);
+        
         self.pawns = self.pawns.swap_bytes();
         self.knights = self.knights.swap_bytes();
         self.bishops = self.bishops.swap_bytes();
         self.rooks = self.rooks.swap_bytes();
         self.queens = self.queens.swap_bytes();
-        self.kings = self.kings.swap_bytes();
-        self.actv = self.actv.swap_bytes();
-        self.idle = self.idle.swap_bytes();
+        (self.actv_king_sq, self.idle_king_sq) = (flip_sq(self.idle_king_sq), flip_sq(self.actv_king_sq));
+        (self.actv, self.idle) = (self.idle.swap_bytes(), self.actv.swap_bytes());
+        (self.actv_castle_rights, self.idle_castle_rights) = (self.idle_castle_rights, self.actv_castle_rights);
 
         self.all = self.actv | self.idle;
         self.hash ^= zobrist::COLOUR_HASH;
@@ -226,12 +199,12 @@ impl Board {
     /// Play a move on the board, and flip the player turn.
     /// 
     /// Note that legality is not checked.
-    pub fn make(&mut self, Move { from_sq, to_sq, piece }: Move) -> Unmake {
+    pub fn make(&mut self, Move { from_sq, to_sq, piece }: Move) /* -> Unmake */ {
         let is_actv_white = self.colour == 1;
         let from = 1u64 << from_sq;
         let to = 1u64 << to_sq;
 
-        let mut unmake = Unmake {
+        /* let mut unmake = Unmake {
             pawn_move: false,
             capture: None,
             en_passant: self.en_passant,
@@ -239,7 +212,7 @@ impl Board {
             fifty_move_clock: self.fifty_move_clock,
             actv_castle_flags: self.actv_castle_flags,
             idle_castle_flags: self.idle_castle_flags,
-        };
+        }; */
         
         self.fifty_move_clock += 1;
         
@@ -249,14 +222,27 @@ impl Board {
             self.idle &= !to;
             self.fifty_move_clock = 0;
             self.hash ^= zobrist::get_piece_hash_idle(!is_actv_white, cap, to_sq);
-            unmake.capture = Some(Capture::Normal(cap));
+            /* unmake.capture = Some(Capture::Normal(cap)); */
             match cap {
                 Piece::Pawn => self.pawns &= !to,
                 Piece::Knight => self.knights &= !to,
                 Piece::Bishop => self.bishops &= !to,
-                Piece::Rook => self.rooks &= !to,
                 Piece::Queen => self.queens &= !to,
-                Piece::King => panic!("king captured!"),
+                Piece::Rook => {
+                    self.rooks &= !to;
+                    if to == 0x100000000000000 {
+                        if self.idle_castle_rights.contains(CastleRights::QUEENSIDE) {
+                            self.idle_castle_rights &= !CastleRights::QUEENSIDE;
+                            self.hash ^= zobrist::get_hash_qs_castle(!is_actv_white);
+                        }
+                    } else if to == 0x8000000000000000 {
+                        if self.idle_castle_rights.contains(CastleRights::KINGSIDE) {
+                            self.idle_castle_rights &= !CastleRights::KINGSIDE;
+                            self.hash ^= zobrist::get_hash_ks_castle(!is_actv_white);
+                        }
+                    }
+                }
+                Piece::King => panic!("king captured! fen: {} | {:?} | {:?}", self.to_fen(), Move::new(from_sq, to_sq, piece), &self),
             }
         } else {
             // check for en passant before assuming no capture
@@ -270,11 +256,14 @@ impl Board {
                     Piece::Pawn,
                     to_sq - 0o10
                 );
-                unmake.capture = Some(Capture::EnPassant);
+                /* unmake.capture = Some(Capture::EnPassant); */
             }
         }
         
-        self.en_passant = 0; // clear between potential read and write
+        if self.en_passant != 0 {
+            self.hash ^= zobrist::get_hash_en_passant(self.en_passant);
+            self.en_passant = 0; // clear between potential read and write
+        }
 
         match piece {
             Piece::Pawn => {
@@ -285,23 +274,28 @@ impl Board {
                 if to == from << 16 {
                     // shift accounts for board flip
                     self.en_passant = from << 0o40;
+                    self.hash ^= zobrist::get_hash_en_passant(self.en_passant);
                 }
             }
             Piece::Knight => self.knights = self.knights & !from | to,
             Piece::Bishop => self.bishops = self.bishops & !from | to,
-            Piece::Queen =>  self.queens = self.queens & !from | to,
+            Piece::Queen =>  self.queens  = self.queens  & !from | to,
             Piece::Rook => {
                 self.rooks = self.rooks & !from | to;
-                if from == 0o0 {
-                    self.actv_castle_flags &= !CastleFlags::QUEENSIDE;
-                    self.hash ^= zobrist::get_hash_qs_castle(is_actv_white);
-                } else if from == 0o7 {
-                    self.actv_castle_flags &= !CastleFlags::KINGSIDE;
-                    self.hash ^= zobrist::get_hash_ks_castle(is_actv_white);
+                if from == 0x1 {
+                    if self.actv_castle_rights.contains(CastleRights::QUEENSIDE) {
+                        self.actv_castle_rights &= !CastleRights::QUEENSIDE;
+                        self.hash ^= zobrist::get_hash_qs_castle(is_actv_white);
+                    }
+                } else if from == 0x80 {
+                    if self.actv_castle_rights.contains(CastleRights::KINGSIDE) {
+                        self.actv_castle_rights &= !CastleRights::KINGSIDE;
+                        self.hash ^= zobrist::get_hash_ks_castle(is_actv_white);
+                    }
                 }
             },
             Piece::King => {
-                self.kings = self.kings & !from | to;
+                self.actv_king_sq = to_sq;
                 if from == to >> 2 { // kingside castle!
                     self.rooks = self.rooks & !0x80 | 0x20;
                     self.actv = self.actv & !0x80 | 0x20;
@@ -313,13 +307,13 @@ impl Board {
                     self.hash ^= zobrist::get_piece_hash_actv(is_actv_white, Piece::Rook, 0o0);
                     self.hash ^= zobrist::get_piece_hash_actv(is_actv_white, Piece::Rook, 0o3);
                 }
-                if self.actv_castle_flags.contains(CastleFlags::KINGSIDE) {
+                if self.actv_castle_rights.contains(CastleRights::KINGSIDE) {
                     self.hash ^= zobrist::get_hash_ks_castle(is_actv_white);
                 }
-                if self.actv_castle_flags.contains(CastleFlags::QUEENSIDE) {
+                if self.actv_castle_rights.contains(CastleRights::QUEENSIDE) {
                     self.hash ^= zobrist::get_hash_qs_castle(is_actv_white);
                 }
-                self.actv_castle_flags = CastleFlags::empty();
+                self.actv_castle_rights = CastleRights::empty();
             }
         }
         
@@ -327,22 +321,22 @@ impl Board {
         self.actv = self.actv & !from | to;
         // update hash & handle pawn promotions
         if self.pawns & from != 0 {
-            unmake.pawn_move = true;
+            /* unmake.pawn_move = true; */
             self.pawns &= !from;
-            self.hash ^= zobrist::get_piece_hash_idle(is_actv_white, Piece::Pawn, from_sq);
+            self.hash ^= zobrist::get_piece_hash_actv(is_actv_white, Piece::Pawn, from_sq);
         } else {
-            self.hash ^= zobrist::get_piece_hash_idle(is_actv_white, piece, from_sq);
+            self.hash ^= zobrist::get_piece_hash_actv(is_actv_white, piece, from_sq);
         }
-        self.hash ^= zobrist::get_piece_hash_idle(is_actv_white, piece, to_sq);
+        self.hash ^= zobrist::get_piece_hash_actv(is_actv_white, piece, to_sq);
 
         // bookkeeping
         self.flip();
         self.move_count += (self.colour + 1) as u16 >> 1;
 
-        unmake
+        /* unmake */
     }
 
-    pub fn unmake(&mut self, Move { from_sq, to_sq, piece }: Move, unmake: &Unmake) {
+    /* pub fn unmake(&mut self, Move { from_sq, to_sq, piece }: Move, unmake: &Unmake) {
         let from = 1u64 << from_sq;
         let to = 1u64 << to_sq;
 
@@ -363,7 +357,7 @@ impl Board {
             }
         }
 
-        
+        // update moved piece
         match piece {
             Piece::Pawn =>   self.pawns = self.pawns & !to | from,
             Piece::Knight => self.knights = self.knights & !to | from,
@@ -371,7 +365,7 @@ impl Board {
             Piece::Queen =>  self.queens = self.queens & !to | from,
             Piece::Rook =>   self.rooks = self.rooks & !to | from,
             Piece::King => {
-                self.kings = self.kings & !to | from;
+                self.actv_king_sq = from_sq;
                 if from == to >> 2 { // kingside castle!
                     self.rooks = self.rooks & !0x20 | 0x80;
                     self.actv = self.actv & !0x20 | 0x80;
@@ -386,7 +380,6 @@ impl Board {
         if let Some(cap) = unmake.capture {
             match cap {
                 Capture::Normal(piece) => {
-                    // remove piece & reset 50-move rule clock
                     self.idle |= to;
                     match piece {
                         Piece::Pawn => self.pawns |= to,
@@ -394,7 +387,7 @@ impl Board {
                         Piece::Bishop => self.bishops |= to,
                         Piece::Rook => self.rooks |= to,
                         Piece::Queen => self.queens |= to,
-                        Piece::King => panic!("king captured!"),
+                        Piece::King => unreachable!(),
                     }
                 },
                 Capture::EnPassant => {
@@ -412,34 +405,32 @@ impl Board {
         self.fifty_move_clock = unmake.fifty_move_clock;
         self.hash = unmake.hash;
         self.en_passant = unmake.en_passant;
-    }
+    } */
 
 
     /// Play a null move and flip the player turn.
     pub fn make_null(&mut self) {
+        // fixme en passant?
         self.flip();
-        self.fifty_move_clock += 1;
         self.move_count += (self.colour + 1) as u16 >> 1;
+        self.fifty_move_clock += 1;
+    }
+    /// Undo a null move and flip the player turn.
+    pub fn unmake_null(&mut self) {
+        self.flip();
+        self.move_count -= (self.colour + 1) as u16 >> 1;
+        self.fifty_move_clock -= 1;
     }
 
     /// Check for stalemate and checkmate.
     pub fn is_mate(&self) -> Option<GameOver> {
         let mut move_table = mov::MoveSetTable::new();
-        self.get_moveset_actv(&mut move_table);
+        self.get_move_tab_actv(&mut move_table);
         
-        // if any move avoids check, no mate
-        // `make` does not mutate state unless a legal move is successfully 
-        // played, thus it need only be fixme todo
-        for set in move_table.get_move_sets() {
-            for mov in set.iter() {
-                if self.is_move_legal(mov) { return None; }
-            }
-        }
-        for set in move_table.get_prom_sets() {
-            for pro in set.iter() {
-                if self.is_move_legal(pro) { return None; }
-            }
-        }
+        // if any move can be legally played, no mate
+        for_mov!(mov in move_table => {
+            if self.is_move_legal(mov) { return None; }
+        });
 
         if self.is_actv_in_check() {
             Some(GameOver::Checkmate)
@@ -485,36 +476,7 @@ impl Board {
     }
 
     
-    /// Check whether the `actv` king would be kingside castling through check.
-    fn can_kingside_castle(&self) -> bool {
-        let idle_strt = (self.rooks | self.queens) & self.idle;
-        let idle_diag = (self.bishops | self.queens) & self.idle;
-        self.idle & self.knights & 0xF8DC00 == 0
-        && fend::bishop_fend(4, self.all) & idle_diag == 0
-        && fend::bishop_fend(5, self.all) & idle_diag == 0
-        && fend::bishop_fend(6, self.all) & idle_diag == 0
-        && fend::rook_fend(4, self.all) & idle_strt == 0
-        && fend::rook_fend(5, self.all) & idle_strt == 0
-        && fend::rook_fend(6, self.all) & idle_strt == 0
-        && 0xF800 & self.idle & self.pawns == 0
-        && 0xF8F8 & self.idle & self.kings == 0
-    }
-    /// Check whether the `actv` king would be queenside castling through check.
-    fn can_queenside_castle(&self) -> bool {
-        let idle_strt = (self.rooks | self.queens) & self.idle;
-        let idle_diag = (self.bishops | self.queens) & self.idle;
-        0x3E7700 & self.idle & self.knights == 0
-        && fend::bishop_fend(4, self.all) & idle_diag == 0
-        && fend::bishop_fend(3, self.all) & idle_diag == 0
-        && fend::bishop_fend(2, self.all) & idle_diag == 0
-        && fend::rook_fend(4, self.all) & idle_strt == 0
-        && fend::rook_fend(3, self.all) & idle_strt == 0
-        && fend::rook_fend(2, self.all) & idle_strt == 0
-        && 0x3E00 & self.idle & self.pawns == 0
-        && 0x3E3E & self.idle & self.kings == 0
-    }
-    
-    /// Computes the bitmap of 'covered' tiles by `actv`.
+    /* /// Computes the bitmap of 'covered' tiles by `actv`.
     pub fn calc_actv_fend(&self) -> u64 {
         let mut fend = 0;
         fend |= fend::pawns_fend_actv(self.pawns & self.actv);
@@ -522,7 +484,7 @@ impl Board {
         fend |= fend::bishops_fend(self.bishops & self.actv, self.all);
         fend |= fend::rooks_fend(self.rooks & self.actv, self.all);
         fend |= fend::queens_fend(self.queens & self.actv, self.all);
-        fend |= fend::king_fend(self.actv_king_sq());
+        fend |= fend::king_fend(self.actv_king_sq);
         fend
     }
     /// Computes the bitmap of 'covered' tiles by `idle`.
@@ -533,18 +495,71 @@ impl Board {
         fend |= fend::bishops_fend(self.bishops & self.idle, self.all);
         fend |= fend::rooks_fend(self.rooks & self.idle, self.all);
         fend |= fend::queens_fend(self.queens & self.idle, self.all);
-        fend |= fend::king_fend(self.idle_king_sq()); 
+        fend |= fend::king_fend(self.idle_king_sq); 
         fend
+    } */
+
+    /// Check if `self` is in a valid state.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        use crate::as_result;
+
+        // validate king square data
+        as_result!(self.idle_king_sq < 64)?;
+        as_result!(1 << self.idle_king_sq & self.idle != 0)?;
+        as_result!(self.actv_king_sq < 64)?;
+        as_result!(1 << self.actv_king_sq & self.actv != 0)?;
+
+        // validate bitboard cohesion
+        as_result!(self.actv & self.idle == 0)?;
+        as_result!(self.all == self.actv | self.idle)?;
+
+        // validate against piece role overlap
+        let mut overlap = self.pawns;
+        as_result!(self.knights & overlap == 0)?;
+        overlap |= self.knights;
+        as_result!(self.bishops & overlap == 0)?;
+        overlap |= self.bishops;
+        as_result!(self.rooks & overlap == 0)?;
+        overlap |= self.rooks;
+        as_result!(self.queens & overlap == 0)?;
+        overlap |= self.queens;
+        as_result!(1 << self.actv_king_sq & overlap == 0)?;
+        overlap |= 1 << self.actv_king_sq;
+        as_result!(1 << self.idle_king_sq & overlap == 0)?;
+
+        // validate pawn positions and en passant
+        as_result!(self.pawns & 0xFF000000000000FF == 0)?;
+        as_result!(self.en_passant.count_ones() <= 1)?;
+        as_result!((self.en_passant >> 0o10 & self.pawns & self.idle & 0xFF00000000) << 0o10 == self.en_passant)?;
+
+        // validate castle rights as best as possible
+        as_result!(!self.actv_castle_rights.contains(CastleRights::KINGSIDE)  || self.actv_king_sq == 0o4)?;
+        as_result!(!self.actv_castle_rights.contains(CastleRights::KINGSIDE)  || self.rooks & self.actv & 0x80 != 0)?;
+        as_result!(!self.actv_castle_rights.contains(CastleRights::QUEENSIDE) || self.actv_king_sq == 0o4)?;
+        as_result!(!self.actv_castle_rights.contains(CastleRights::QUEENSIDE) || self.rooks & self.actv & 0x1 != 0)?;
+        as_result!(!self.idle_castle_rights.contains(CastleRights::KINGSIDE)  || self.idle_king_sq == 0o74)?;
+        as_result!(!self.idle_castle_rights.contains(CastleRights::KINGSIDE)  || self.rooks & self.idle & 0x8000000000000000 != 0)?;
+        as_result!(!self.idle_castle_rights.contains(CastleRights::QUEENSIDE) || self.idle_king_sq == 0o74)?;
+        as_result!(!self.idle_castle_rights.contains(CastleRights::QUEENSIDE) || self.rooks & self.idle & 0x100000000000000 != 0)?;
+
+        // validate position legality
+        as_result!(!self.is_idle_in_check())?;
+
+        // validate misc data as best as possible
+        as_result!(self.colour.abs() == 1)?;
+        as_result!(self.hash == self.calc_hash())?;
+        as_result!(self.fifty_move_clock <= (self.move_count - 1) * 2 + 1)?;
+
+        Ok(())
     }
 }
-
 
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
+    /* #[test]
     fn test_make_unmake() {
         let fen1 = "r1bqk1nr/pppp1ppp/2B5/2b1p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQ - 0 4";
         let fen2 = "R7/6k1/8/8/P6P/6K1/8/4r3 b - - 0 1";
@@ -562,5 +577,37 @@ mod tests {
         let unmake = board.make(mov);
         board.unmake(mov, &unmake);
         assert_eq!(board, comparison);
+    } */
+
+    #[test]
+    fn test_make_is_move_legal() {
+        let fen1 = "r1bq1r1k/ppp2B1p/3n1n1b/4NPp1/4P3/3P4/PPPK2PP/RNBQ3R w - g6 0 1"; // en passant
+        let fen2 = "r1bq1rk1/ppp1bB1p/3n1n2/4N3/4P1p1/3P4/PPP2PPP/RNBQ1RK1 b - - 0 1"; // captures and defends
+        let fen3 = "r1bq1r1k/ppp2B1p/5nb1/4NPp1/1B2P3/1QN5/PPP3PP/R3K2R w KQ - 0 1"; // castling
+        let fen4 = "r1bqkbnr/1ppp2pp/2n5/1p2pp1Q/3NP3/1P6/P1PP1PPP/RNB1K2R w KQkq - 0 7";
+
+        for fen in [fen1, fen2, fen3, fen4] {
+            dbg!(&fen);
+            let board = Board::from_fen(fen).unwrap();
+            board.validate().unwrap();
+            let mut tab = mov::MoveSetTable::new();
+            board.get_move_tab_actv(&mut tab);
+            for_mov!(mov in tab => {
+                if board.is_move_legal(mov) {
+                    dbg!(mov);
+                    let mut board = board.clone();
+                    board.make(mov);
+                    /* dbg!(&board); */
+                    dbg!(&board.to_fen());
+                    assert!(!board.is_idle_in_check());
+                    board.validate().unwrap();
+                } else {
+                    let mut board = board.clone();
+                    board.make(mov);
+                    /* dbg!(&board); */
+                    assert!(board.is_idle_in_check());
+                }
+            });
+        }
     }
 }

@@ -3,10 +3,19 @@ name = "infra"
 version = "0.1.0"
 edition = "2021"
 
+[profile.release]
+debug = true
 
 [dependencies]
 bitflags = "^1.3.2"
 fastrand = "^1.7.0"
+vampirc-uci = "^0.11.1"
+pgn-reader = "^0.20.0"
+id_tree = "^1.8.0"
+parking_lot = "^0.12.1"
+once_cell = { version = "1.12.0", features = ["parking_lot"] }
+rayon = "1.5.3"
+crossbeam-channel = "0.5.5"
 
 [dev-dependencies]
 criterion = "0.3"
