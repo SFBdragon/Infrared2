@@ -16,26 +16,31 @@ fn main() {
         trans_table: &ttab,
         pos_hash_map: &phm,
 
-        //null_prune: false,
         node_count: 0,
         check_exts: 0,
     };
     
     /* let t1 = std::time::Instant::now();
-    let score = nm(&board, 7, -i16::MAX, i16::MAX);
+    let score = nm(&board, 7, f32::NEG_INFINITY, f32::INFINITY);
     let t2 = std::time::Instant::now();
     println!("{}", (t2 - t1).as_secs_f32());
     dbg!(score); */
     
     let t1 = std::time::Instant::now();
-    let score1 = infra::engine::negamax(&mut board, -i16::MAX, i16::MAX, 7, &mut search_data, None);
+    let score1 = infra::engine::negamax(&mut board, -i16::MAX, i16::MAX, 6, &mut search_data, None);
     board.make(infra::Move::new(0o15, 0o25, infra::Piece::Pawn));
-    let score2 = infra::engine::negamax(&mut board, -i16::MAX, i16::MAX, 7, &mut search_data, None);
+    let score2 = infra::engine::negamax(&mut board, -i16::MAX, i16::MAX, 6, &mut search_data, None);
     let t2 = std::time::Instant::now();
     dbg!(score1);
     dbg!(score2);
     println!("total: {}s", (t2 - t1).as_secs_f32());
 
+    
+    /* let t1 = std::time::Instant::now();
+    let score = nm(&board, 7, f32::NEG_INFINITY, f32::INFINITY);
+    let t2 = std::time::Instant::now();
+    println!("{}", (t2 - t1).as_secs_f32());
+    dbg!(score); */
 
     return;
     

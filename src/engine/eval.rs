@@ -1,5 +1,6 @@
 use crate::{Board, Piece, for_sq, board::fend};
 
+
 pub const DRAW: i16 = 0;
 pub const MATE: i16 = -32000;
 
@@ -29,6 +30,7 @@ fn fold_file(mut file: usize) -> usize {
 fn popcntf(bb: u64) -> f32 {
     bb.count_ones() as f32
 }
+
 
 pub fn eval(pos: &Board) -> i16 {
     let mut eval = 0.0f32;

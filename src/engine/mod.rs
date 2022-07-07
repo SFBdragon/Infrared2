@@ -79,8 +79,6 @@ pub fn search(
                         pos_hash_map: &pos_hash_map,
 
                         node_count: 0,
-                      
-                        //null_prune: false,
                         check_exts: 0,
                     };
 
@@ -124,14 +122,12 @@ pub struct SearchData<'a> {
     pub pos_hash_map: &'a PosHashMap,
 
     pub node_count: usize,
-
-    //pub null_prune: bool,
     pub check_exts: u8,
     //pub killers: Vec<(Move, Move)>,
 }
 
 pub fn negamax(board: &mut Board, mut alpha: i16, beta: i16, draft: i8, data: &mut SearchData, prev_phn: Option<&PosHashNode>) -> i16 {
-    if draft == 0 { return eval::eval(board) /* quesce(board, alpha, beta, 0) */ ; }
+    if draft == 0 { return /* eval::eval(board) */ quesce(board, alpha, beta, 0) ; }
     if draft >= 4 && data.kill_switch.load(SeqCst) { return -i16::MAX; }
 
     let og_alpha = alpha;
@@ -145,15 +141,13 @@ pub fn negamax(board: &mut Board, mut alpha: i16, beta: i16, draft: i8, data: &m
     if draft > 2 && !king_and_pawns && !is_actv_in_check && material_eval >= 100 {
         board.make_null();
         let phn = PosHashNode::new(board.hash, prev_phn);
-        //data.null_prune = true;
         let null_score = negamax(board, -beta, -alpha, draft - 2, data, Some(&phn));
-        //data.null_prune = false;
         board.unmake_null();
         if null_score >= beta { return null_score; }
     }
     
     //if draft > 1 {
-    /* if let Some(search_node) = data.trans_table.get(board.hash) {
+    if let Some(search_node) = data.trans_table.get(board.hash) {
         if search_node.draft >= draft {
             // this search is at least as deep as this one, thus its score is useful
             let search_score = search_node.score;
@@ -186,7 +180,7 @@ pub fn negamax(board: &mut Board, mut alpha: i16, beta: i16, draft: i8, data: &m
             }
             //}
         }
-    } */
+    }
     //}
 
     let mut move_table = crate::board::mov::MoveSetTable::new();
@@ -211,13 +205,13 @@ pub fn negamax(board: &mut Board, mut alpha: i16, beta: i16, draft: i8, data: &m
             } else {
                 // else continue search
                 let phn = PosHashNode::new(board.hash, prev_phn);
-                //if pv.is_some() {
-                //    score = -negamax(&mut board, -alpha-1, -alpha, draft - 1, data, Some(&phn));
-                //}
-                //if pv.is_none() || score > alpha && score < beta {
+                if pv.is_some() {
+                    score = -negamax(&mut board, -alpha-1, -alpha, draft - 1, data, Some(&phn));
+                }
+                if pv.is_none() || score > alpha && score < beta {
                     score = -negamax(&mut board, -beta, -alpha, draft - 1, data, Some(&phn));
-                //    pv = None;
-                //}
+                    pv = None;
+                }
             }
             
             if score > max {
