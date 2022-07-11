@@ -1,8 +1,6 @@
 use std::{mem::{size_of, MaybeUninit}, cell::UnsafeCell, sync::atomic::{AtomicBool, Ordering}};
 
-/// Default transposition table size.
-
-
+/// Transposition Table.
 pub struct TransTable {
     data: Box<[TtBucket]>,
 }
@@ -56,9 +54,9 @@ impl TransTable {
 
     /// Insert `val` into the table given `hash`.
     /// 
-    /// If `hash` already is present, the value is updated to `val`.
-    /// If a collision occurs, `replace_strat` is invoked with the new
-    /// and old value respectively, where the result determines if a replacement
+    /// If `hash` is already present, the value is updated to `val`.
+    /// If a collision occurs, `replace_strat` is invoked with the
+    /// old value, and the return value determines if a replacement
     /// should occur or not.
     #[inline]
     pub fn insert<F>(&self, hash: u64, node: SearchNode, replace_strat: F)
