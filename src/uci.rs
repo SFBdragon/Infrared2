@@ -1,6 +1,6 @@
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, io::Write};
 
-use infra::{Move, Board, Piece, engine::{SearchInfo, ttab, SearchEval}};
+use infra::{Move, Board, Piece, search::{SearchInfo, ttab, SearchEval}};
 use crossbeam_channel::Sender;
 use vampirc_uci::{
     UciMessage, 
@@ -20,6 +20,9 @@ fn read_stdin(sender: Sender<String>) {
 }
 
 pub fn uci() {
+    // init opening book
+    let _ = infra::opening::query_book(0);
+
     // UCI requires that a position be recalled across messages
     let mut position = Option::<Board>::None;
     // UCI requires that the engine is stop-able at any time
@@ -27,21 +30,21 @@ pub fn uci() {
     // UCI hence requires that a bestmove be declarable on-demand
     let mut best_move = Option::<UciMove>::None;
 
-    let /* mut */ trans_table = Option::<Arc<ttab::TransTable>>::Some(Arc::new(ttab::HashTable::with_memory(1024 * 1024 * 1024 * 2)));
-    let mut pos_hash_map = Arc::new(infra::PosHashMap::with_hasher(infra::U64IdentHashBuilder));
+    let /* mut */ trans_table = Option::<Arc<ttab::TransTable>>::Some(Arc::new(ttab::TransTable::default()));
+    let /* mut */ pos_hash_map = Arc::new(infra::PosHashMap::with_hasher(infra::U64IdentHashBuilder));
 
     // Stdin thread should block upon receiving lots of input
     let (stdin_sndr, stdin_rcvr) = crossbeam_channel::bounded::<String>(0);
     let _stdin_handle = thread::spawn(move || read_stdin(stdin_sndr));
 
     // Engine should never be blocked when sending info
-    let (search_sndr, search_rcvr) = crossbeam_channel::unbounded::<SearchInfo>();
+    let (search_sndr, search_rcvr) = crossbeam_channel::unbounded::<(SearchInfo, bool)>();
     
     'event: loop {
         crossbeam_channel::select! {
             recv(search_rcvr) -> search_info => {
                 let search_info = search_info.expect("lost info channel!");
-                best_move = uci_search_info(&position.as_ref().unwrap(), search_info); // todo: fixme
+                best_move = uci_search_info(position.as_ref().unwrap(), search_info.0, search_info.1); // todo: fixme
             }
             recv(stdin_rcvr) -> input => {
                 let input = input.expect("lost stdin channel!");
@@ -68,22 +71,46 @@ pub fn uci() {
                             position = uci_position(startpos, fen, moves)
                         }
                         UciMessage::Go { time_control: _, search_control: _ } => {
-                            kill_switch.store(false, Ordering::SeqCst);
-                            let pos = position.clone().unwrap();
-                            let ks = kill_switch.clone();
-                            let sis = search_sndr.clone();
-                            let ttab = trans_table.as_ref().unwrap().clone();
-                            let phn = pos_hash_map.clone();
+                            position.as_ref().unwrap().validate().unwrap();
 
-                            thread::spawn(move || {
-                                infra::engine::search(
-                                    pos, 
-                                    sis, 
-                                    ttab,
-                                    phn,
-                                    ks
+                            
+
+                            // syzygy query thread (auto checks piece count)
+                            let pos = position.clone().unwrap();
+                            let sis = search_sndr.clone();
+                            thread::spawn(move ||
+                                infra::syzygy::query_table_best_uci(
+                                    pos,
+                                    sis,
                                 )
-                            });
+                            );
+
+                            if let Some(mov) = infra::opening::query_book_best(position.as_ref().unwrap().hash) {
+                                // opening book!
+                                print!("{}\n", UciMessage::BestMove {
+                                    best_move: to_uci_move(position.as_ref().unwrap(), mov),
+                                    ponder: None,
+                                }.to_string());
+                                std::io::stdout().flush().expect("stdout flush error");
+                            } else {
+                                // search!
+                                kill_switch.store(false, Ordering::SeqCst);
+                                let pos = position.clone().unwrap();
+                                let ks = kill_switch.clone();
+                                let sis = search_sndr.clone();
+                                let ttab = trans_table.as_ref().unwrap().clone();
+                                let phn = pos_hash_map.clone();
+    
+                                thread::spawn(move ||
+                                    infra::search::search(
+                                        pos, 
+                                        sis, 
+                                        ttab,
+                                        phn,
+                                        ks
+                                    )
+                                );
+                            }
                         }
                         UciMessage::Stop => {
                             uci_stop(best_move, None, kill_switch.as_ref());
@@ -184,7 +211,7 @@ fn uci_stop(best: Option<UciMove>, ponder: Option<UciMove>, kill_switch: &Atomic
     }
 }
 
-fn uci_search_info(position: &Board, info: SearchInfo) -> Option<UciMove> {
+fn uci_search_info(position: &Board, info: SearchInfo, done: bool) -> Option<UciMove> {
     // send 'info' message
     print!("{}\n", UciMessage::Info(vec![
         // send principal variation
@@ -195,14 +222,15 @@ fn uci_search_info(position: &Board, info: SearchInfo) -> Option<UciMove> {
             mate: if let SearchEval::Mate(depth) = info.eval { Some(depth) } else { None }, 
             lower_bound: None, 
             upper_bound: None 
-        }
+        },
     ]));
 
-    if info.done { // if done, send 'bestmove'
+    if done { // send 'bestmove'
         print!("{}\n", UciMessage::BestMove {
             best_move: to_uci_move(position, info.best),
             ponder: None
         });
+        std::io::stdout().flush().expect("stdout flush error");
 
         // reset provisional best_move
         None 

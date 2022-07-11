@@ -9,7 +9,15 @@ pub fn pawn_fend_idle(sq: u8) -> u64 {
     PAWNS_FEND_MASKS_IDLE[sq as usize]
 }
 #[inline]
+pub(crate) fn pawn_fend_idle_wall(sq: u8, _all: u64) -> u64 {
+    PAWNS_FEND_MASKS_IDLE[sq as usize]
+}
+#[inline]
 pub fn knight_fend(sq: u8) -> u64 {
+    KNIGHT_FEND_MASKS[sq as usize]
+}
+#[inline]
+pub(crate) fn knight_fend_wall(sq: u8, _all: u64) -> u64 {
     KNIGHT_FEND_MASKS[sq as usize]
 }
 #[inline]

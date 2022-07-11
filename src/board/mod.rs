@@ -410,16 +410,16 @@ impl Board {
 
     /// Play a null move and flip the player turn.
     pub fn make_null(&mut self) {
-        // fixme en passant?
         self.flip();
         self.move_count += (self.colour + 1) as u16 >> 1;
         self.fifty_move_clock += 1;
     }
     /// Undo a null move and flip the player turn.
-    pub fn unmake_null(&mut self) {
+    pub fn unmake_null(&mut self, en_passant: u64) {
         self.flip();
         self.move_count -= (self.colour + 1) as u16 >> 1;
         self.fifty_move_clock -= 1;
+        self.en_passant = en_passant;
     }
 
     /// Check for stalemate and checkmate.
@@ -584,7 +584,10 @@ mod tests {
         let fen1 = "r1bq1r1k/ppp2B1p/3n1n1b/4NPp1/4P3/3P4/PPPK2PP/RNBQ3R w - g6 0 1"; // en passant
         let fen2 = "r1bq1rk1/ppp1bB1p/3n1n2/4N3/4P1p1/3P4/PPP2PPP/RNBQ1RK1 b - - 0 1"; // captures and defends
         let fen3 = "r1bq1r1k/ppp2B1p/5nb1/4NPp1/1B2P3/1QN5/PPP3PP/R3K2R w KQ - 0 1"; // castling
-        let fen4 = "r1bqkbnr/1ppp2pp/2n5/1p2pp1Q/3NP3/1P6/P1PP1PPP/RNB1K2R w KQkq - 0 7";
+        let fen4 = "6k1/5pp1/p2Np3/4P2p/1P5n/P7/1N3P2/3R2Kr w - - 4 35";
+
+        let b = Board::from_fen(fen4).unwrap();
+        assert!(b.is_move_legal(Move::new(6, 7, Piece::King)));
 
         for fen in [fen1, fen2, fen3, fen4] {
             dbg!(&fen);

@@ -81,6 +81,7 @@ impl Board {
             0
         } else {
             if en_passant.len() == 2 {
+                // offset accounts for board flip (en_passant is always on idle side)
                 1 << alg_pos_to_sq(en_passant).ok_or("En Passant notation parse failed")?
             } else {
                 return Err("En Passant FEN section contains unexpected value");
@@ -131,7 +132,7 @@ impl Board {
         // if this is wrong, flip the board
         match colour {
             "w" => (),
-            "b" => board.flip(),
+            "b" => { board.flip(); board.en_passant <<= 0o30; },
             _ => return Err("Invalid colour value"),
         };
 

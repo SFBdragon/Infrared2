@@ -1,5 +1,7 @@
 pub mod board;
-pub mod engine;
+pub mod search;
+pub mod opening;
+pub mod syzygy;
 
 pub use board::{Move, Board, Piece, GameOver};
 pub use board::zobrist::{PosHashMap, U64IdentHashBuilder};

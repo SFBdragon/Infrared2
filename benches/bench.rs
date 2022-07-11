@@ -1,6 +1,6 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use infra::{board::{Board, Piece, mov::MoveSetTable, Move}, engine::{negamax, ttab}};
+use infra::{board::{Board, Piece, mov::MoveSetTable, Move}, search::{pvs, ttab}};
 
 fn bench_board_methods(c: &mut Criterion) {
     let fen = "r1bqkbnr/pppp2pp/2n5/1B2pp2/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4";
@@ -24,13 +24,17 @@ fn bench_board_methods(c: &mut Criterion) {
         black_box(score);
     })); */
     
-    println!("eval: {}", infra::engine::eval::eval(&Board::default()));
+    /* println!("eval: {}", infra::engine::eval::eval(&Board::default()));
     println!("eval: {}", infra::engine::eval::eval(&board));
     println!("eval: {}", infra::engine::eval::eval(&Board::from_fen("2k5/8/3P1K2/2B3P1/2b5/8/8/8 b - - 0 1").unwrap()));
     println!("eval: {}", infra::engine::eval::eval(&Board::from_fen("r1bq1rk1/pp3ppp/2n1pn2/3p4/1bPP4/3B1N2/PP1BNPPP/R2QK2R w KQ - 2 5").unwrap()));
     return;
     c.bench_function("eval", |b| b.iter(|| {
         black_box(infra::engine::eval::eval(black_box(&board)));
+    })); */
+    c.bench_function("is_valid_move", |b| b.iter(|| {
+        let mov = Move::new(0o25, 0o44, Piece::Knight);
+        black_box(board.is_valid_move(black_box(mov)));
     }));
     c.bench_function("make", |b| b.iter(|| {
         let mov = Move::new(0o25, 0o44, Piece::Knight);
