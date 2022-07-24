@@ -1,17 +1,16 @@
-//! Piece move generation, packing, and iteration.
-
-use std::mem::MaybeUninit;
+//! Piece move generation.
 
 use crate::{
-    for_sq, 
-    board::{fend, Board, Piece, CastleRights}
+    for_sq, Board, Move, Piece,
+    board::{fend, CastleRights}
 };
 
-use super::Move;
+
+pub const PAWN_PROM_RANK: u64 = 0x00FF000000000000;
 
 impl Board {
     #[inline]
-    pub fn pawn_moves_actv(&self, sq: u8) -> MoveSet {
+    fn pawn_moves(&self, sq: u8) -> MoveSet {
         let mut to_set = 0u64;
         let from = 1u64 << sq;
         debug_assert!(from & 0xFFFF0000000000FF == 0);
@@ -27,10 +26,10 @@ impl Board {
     }
 
     #[inline]
-    pub fn pawn_proms_actv(&self, sq: u8) -> PromSet {
+    fn pawn_proms(&self, sq: u8) -> PromSet {
         let mut to_set = 0u64;
         let from = 1u64 << sq;
-        debug_assert!(from & !0x00FF000000000000 == 0);
+        debug_assert!(from & !PAWN_PROM_RANK == 0);
 
         to_set |= from << 0o10 & !self.all;
 
@@ -41,7 +40,7 @@ impl Board {
     }
 
     #[inline]
-    pub fn knight_moves_actv(&self, sq: u8) -> MoveSet {
+    fn knight_moves(&self, sq: u8) -> MoveSet {
         MoveSet {
             from_sq: sq,
             to_set: fend::knight_fend(sq) & !self.actv,
@@ -50,7 +49,7 @@ impl Board {
     }
 
     #[inline]
-    pub fn bishop_moves_actv(&self, sq: u8) -> MoveSet {
+    fn bishop_moves(&self, sq: u8) -> MoveSet {
         MoveSet {
             from_sq: sq,
             to_set: fend::bishop_fend(sq, self.all) & !self.actv,
@@ -59,7 +58,7 @@ impl Board {
     }
 
     #[inline]
-    pub fn rook_moves_actv(&self, sq: u8) -> MoveSet {
+    fn rook_moves(&self, sq: u8) -> MoveSet {
         MoveSet {
             from_sq: sq,
             to_set: fend::rook_fend(sq, self.all) & !self.actv,
@@ -68,7 +67,7 @@ impl Board {
     }
 
     #[inline]
-    pub fn queen_moves_actv(&self, sq: u8) -> MoveSet {
+    fn queen_moves(&self, sq: u8) -> MoveSet {
         MoveSet {
             from_sq: sq,
             to_set: fend::queen_fend(sq, self.all) & !self.actv,
@@ -76,152 +75,91 @@ impl Board {
         }
     }
 
-    /// Check whether the `actv` king would be kingside castling through check.
-    fn can_kingside_castle(&self) -> bool {
-        let idle_strt = (self.rooks | self.queens) & self.idle;
-        let idle_diag = (self.bishops | self.queens) & self.idle;
-        0xF8DC00 & self.idle & self.knights == 0
-        && fend::bishop_fend(4, self.all) & idle_diag == 0
-        && fend::bishop_fend(5, self.all) & idle_diag == 0
-        && fend::bishop_fend(6, self.all) & idle_diag == 0
-        && fend::rook_fend(4, self.all) & idle_strt == 0
-        && fend::rook_fend(5, self.all) & idle_strt == 0
-        && fend::rook_fend(6, self.all) & idle_strt == 0
-        && 0xF800 & self.idle & self.pawns == 0
-        && 0xF8F8 & (1u64 << self.idle_king_sq) == 0
-    }
-    /// Check whether the `actv` king would be queenside castling through check.
-    fn can_queenside_castle(&self) -> bool {
-        let idle_strt = (self.rooks | self.queens) & self.idle;
-        let idle_diag = (self.bishops | self.queens) & self.idle;
-        0x3E7700 & self.idle & self.knights == 0
-        && fend::bishop_fend(4, self.all) & idle_diag == 0
-        && fend::bishop_fend(3, self.all) & idle_diag == 0
-        && fend::bishop_fend(2, self.all) & idle_diag == 0
-        && fend::rook_fend(4, self.all) & idle_strt == 0
-        && fend::rook_fend(3, self.all) & idle_strt == 0
-        && fend::rook_fend(2, self.all) & idle_strt == 0
-        && 0x3E00 & self.idle & self.pawns == 0
-        && 0x3E3E & (1u64 << self.idle_king_sq) == 0
-    }
-    
-    pub fn king_moves_actv(&self, sq: u8) -> MoveSet {
-        let mut to_set = fend::king_fend(sq) & !self.actv;
+    /// Generates legal king moves only.
+    fn king_moves(&self) -> MoveSet {
+        // calculate all covered squares by idle (except king-covered)
+        let mut idle_fend = 0;
+        idle_fend |= fend::king_fend(self.idle_king_sq); 
+        idle_fend |= fend::pawns_fend_idle(self.pawns & self.idle);
+        for_sq!(sq in self.knights & self.idle => idle_fend |= fend::knight_fend(sq));
+        let all = self.all & !(1 << self.actv_king_sq);
+        for_sq!(sq in (self.bishops | self.queens) & self.idle => idle_fend |= fend::bishop_fend(sq, all));
+        for_sq!(sq in (self.rooks   | self.queens) & self.idle => idle_fend |= fend::rook_fend(sq, all));
+
+        // normal king moves
+        let mut to = fend::king_fend(self.actv_king_sq) & !self.actv & !idle_fend;
 
         // castling
         if self.actv_castle_rights.contains(CastleRights::KINGSIDE) {
-            if self.all & 0x60 == 0 && self.can_kingside_castle() {
-                to_set |= 0x40;
-            }
+            if self.all & 0x60 == 0 && idle_fend & 0x70 != 0 { to |= 0x40; }
         }
         if self.actv_castle_rights.contains(CastleRights::QUEENSIDE) {
-            if self.all & 0xE == 0 && self.can_queenside_castle() {
-                to_set |= 0x4;
-            }
+            if self.all &  0xE == 0 && idle_fend & 0x1C != 0 { to |= 0x4; }
         }
         
-        MoveSet {
-            from_sq: sq,
-            to_set,
-            piece: Piece::King,
-        }
+        MoveSet { from_sq: self.actv_king_sq, to_set: to, piece: Piece::King }
     }
 
-
-    /// Provides illegal moves wrt checking.
-    pub fn get_move_tab_actv(&self, tab: &mut MoveSetTable) {
-        for_sq!(sq in self.pawns & self.actv & 0x00FF000000000000 => {
-            tab.push_prom(self.pawn_proms_actv(sq));
-        });
-        for_sq!(sq in self.pawns & self.actv & !0x00FF000000000000 => {
-            tab.push(self.pawn_moves_actv(sq));
-        });
-        for_sq!(sq in self.knights & self.actv => { tab.push(self.knight_moves_actv(sq)); });
-        for_sq!(sq in self.bishops & self.actv => { tab.push(self.bishop_moves_actv(sq)); });
-        for_sq!(sq in self.rooks & self.actv => { tab.push(self.rook_moves_actv(sq)); });
-        for_sq!(sq in self.queens & self.actv => { tab.push(self.queen_moves_actv(sq)); });
-        tab.push(self.king_moves_actv(self.actv_king_sq));
+    /// Generate all legal moves until closure returns true.
+    #[inline]
+    pub fn for_mov<F: FnMut(Move) -> bool>(&self, mut f: F) {
+        // while seemingly ripe for refactor, note: return embedment; highly layered closures tank search perf; column associativity -> maintainability
+        for_sq!(sq in self.pawns & self.actv &  PAWN_PROM_RANK => for m in self.pawn_proms  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+        for_sq!(sq in self.pawns & self.actv & !PAWN_PROM_RANK => for m in self.pawn_moves  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+        for_sq!(sq in self.knights & self.actv                 => for m in self.knight_moves(sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+        for_sq!(sq in self.bishops & self.actv                 => for m in self.bishop_moves(sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+        for_sq!(sq in self.rooks & self.actv                   => for m in self.rook_moves  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+        for_sq!(sq in self.queens & self.actv                  => for m in self.queen_moves (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+        /* programming is an art! */                              for m in self.king_moves  (  ).iter() { if                     (&mut f)(m) { return } }
     }
     
-    pub fn get_role_move_tab_actv(&self, piece: Piece, tab: &mut MoveSetTable) {
-        match piece {
-            Piece::Pawn => {
-                for_sq!(sq in self.pawns & self.actv & 0x00FF000000000000 => {
-                    tab.push_prom(self.pawn_proms_actv(sq));
-                });
-                for_sq!(sq in self.pawns & self.actv & !0x00FF000000000000 => {
-                    tab.push(self.pawn_moves_actv(sq));
-                });
-            },
-            Piece::Knight => {
-                for_sq!(sq in self.knights & self.actv => {
-                    tab.push(self.knight_moves_actv(sq));
-                });
-            },
-            Piece::Bishop => {
-                for_sq!(sq in self.bishops & self.actv => {
-                    tab.push(self.bishop_moves_actv(sq)); });
-            },
-            Piece::Rook => {
-                for_sq!(sq in self.rooks & self.actv => { 
-                    tab.push(self.rook_moves_actv(sq)); 
-                });
-            },
-            Piece::Queen => {
-                for_sq!(sq in self.queens & self.actv => { 
-                    tab.push(self.queen_moves_actv(sq)); 
-                });
-            },
-            Piece::King => tab.push(self.king_moves_actv(self.actv_king_sq)),
-        }
+    /// Checks whether a generates pseudo-legal move is legal.
+    pub fn is_legal(&self, Move { from_sq, to_sq, piece }: Move) -> bool {
+        let king_sq = if let Piece::King = piece { to_sq } else { self.actv_king_sq };
+        let (from, to) = (1 << from_sq, 1 << to_sq);
+
+        let ep = if to & self.en_passant != 0 && piece == Piece::Pawn { to >> 0o10 } else { 0 }; // en passant
+        let all = self.all & !from & !ep | to;
+        let idle = self.idle & !to & !ep;
+        
+        fend::knight_fend(king_sq) & self.knights & idle == 0
+        && fend::bishop_fend(king_sq, all) & (self.bishops | self.queens) & idle == 0
+        && fend::rook_fend(king_sq, all) & (self.rooks | self.queens) & idle == 0
+        && fend::pawn_fend_actv(king_sq) & self.pawns & idle == 0
     }
 
-    pub fn get_move_set_actv(&self, from_sq: u8, piece: Piece) -> Set {
-        let from = 1u64 << from_sq;
-        if piece == Piece::Pawn && from & 0x00FF000000000000 != 0 {
-            Set::Prom(self.pawn_proms_actv(from_sq))
-        } else {
-            Set::Move(match piece {
-                Piece::King => self.king_moves_actv(from_sq),
-                Piece::Queen => self.queen_moves_actv(from_sq),
-                Piece::Rook => self.rook_moves_actv(from_sq),
-                Piece::Bishop => self.bishop_moves_actv(from_sq),
-                Piece::Knight => self.knight_moves_actv(from_sq),
-                Piece::Pawn => self.pawn_moves_actv(from_sq),
-            })
-        }
-    }
-
-    /// Test if a move is a valid pseudo-legal move in the position `self`.
-    /// (Generated moves will always be valid.)
-    pub fn is_valid_move(&self, Move { from_sq, to_sq, piece }: Move) -> bool {
-        let from = 1u64 << from_sq;
-        let to = 1u64 << to_sq;
+    /// Test if an arbitrary move is valid and legal in this position.
+    pub fn is_valid(&self, mov: Move) -> bool {
+        let piece = mov.piece;
+        let from_sq = mov.from_sq;
+        let from = 1u64 << mov.from_sq;
+        let to = 1u64 << mov.to_sq;
 
         // check if an actv piece exists on this square
         if from & self.actv == 0 { return false; }
 
         // handle promotion, else handle normal move
-        if piece != Piece::Pawn && from & self.pawns != 0 && from & 0xFF000000000000 != 0 {
+        if piece != Piece::Pawn && from & self.pawns != 0 && from & PAWN_PROM_RANK != 0 {
             // ensure valid promotion piece
             if piece == Piece::Pawn || piece == Piece::King { return false; }
 
             // ensure valid move
-            self.pawn_proms_actv(from_sq).to_set & to != 0
+            self.pawn_proms(from_sq).to_set & to != 0 && self.is_legal(mov)
         } else {
             // ensure piece identity
             if self.get_piece_at(from) != Some(piece) { return false; }
 
             // ensure valid move
             let to_set = match piece {
-                Piece::King => self.king_moves_actv(from_sq).to_set,
-                Piece::Queen => self.queen_moves_actv(from_sq).to_set,
-                Piece::Rook => self.rook_moves_actv(from_sq).to_set,
-                Piece::Bishop => self.bishop_moves_actv(from_sq).to_set,
-                Piece::Knight => self.knight_moves_actv(from_sq).to_set,
-                Piece::Pawn => self.pawn_moves_actv(from_sq).to_set,
+                Piece::King => self.king_moves().to_set,
+                Piece::Queen => self.queen_moves(from_sq).to_set,
+                Piece::Rook => self.rook_moves(from_sq).to_set,
+                Piece::Bishop => self.bishop_moves(from_sq).to_set,
+                Piece::Knight => self.knight_moves(from_sq).to_set,
+                Piece::Pawn => self.pawn_moves(from_sq).to_set,
             };
-            to_set & to != 0
+
+            to_set & to != 0 && self.is_legal(mov)
         }
     }
 }
@@ -258,17 +196,7 @@ impl PromSet {
             from_sq: self.from_sq,
             to_set: self.to_set,
             to_sq: 0,
-            piece_index: PROM_PIECE_COUNT
-        }
-    }
-
-    #[inline]
-    pub fn ai_iter(&self) -> AiPromSetIter {
-        AiPromSetIter {
-            from_sq: self.from_sq,
-            to_set: self.to_set,
-            to_sq: 0,
-            piece_index: AI_PROM_PIECE_COUNT
+            piece_index: 0,
         }
     }
 }
@@ -295,31 +223,23 @@ impl Iterator for MoveSetIter {
     }
 }
 
-const PROM_PIECE_COUNT: usize = 4;
-const AI_PROM_PIECE_COUNT: usize = 2;
-const PROM_PIECE_SET: [Piece; 4] = [Piece::Queen, Piece::Knight, Piece::Rook, Piece::Bishop];
-
-/// Iterator over all promotion possiblities for a piece.
-pub type PromSetIter = GenPromSetIter::<PROM_PIECE_COUNT>;
-/// Iterator over engine-relevant promotion possiblities for a piece.
-pub type AiPromSetIter = GenPromSetIter::<AI_PROM_PIECE_COUNT>;
-
-/// Generic iterator over the extrapolated promotion possiblities
-/// from a packed `PromSet` structure.
+/// Iterator over the extrapolated promotion possiblities from a `PromSet`.
 #[derive(Debug, Clone)]
-pub struct GenPromSetIter<const PIECE_COUNT: usize> {
+pub struct PromSetIter {
     to_set: u64,
     from_sq: u8,
     to_sq: u8, 
     piece_index: usize,
 }
 
-impl<const PIECE_COUNT: usize> Iterator for GenPromSetIter<PIECE_COUNT> {
+impl Iterator for PromSetIter {
     type Item = Move;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.piece_index == PIECE_COUNT {
+        const PROM_PIECES: [Piece; 4] = [Piece::Queen, Piece::Knight, Piece::Rook, Piece::Bishop];
+
+        if self.piece_index == PROM_PIECES.len() {
             if self.to_set == 0 {
                 return None;
             }
@@ -330,160 +250,8 @@ impl<const PIECE_COUNT: usize> Iterator for GenPromSetIter<PIECE_COUNT> {
             self.to_set &= self.to_set - 1;
         }
         
-        let prom = PROM_PIECE_SET[self.piece_index];
+        let prom = PROM_PIECES[self.piece_index];
         self.piece_index += 1;
         Some(Move::new(self.from_sq, self.to_sq, prom))
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Set {
-    Move(MoveSet),
-    Prom(PromSet),
-}
-
-impl Set {
-    pub fn get_move_sets(self) -> Option<MoveSet> {
-        match self {
-            Set::Move(mov) => Some(mov),
-            Set::Prom(_) => None,
-        }
-    }
-    pub fn get_prom_sets(self) -> Option<PromSet> {
-        match self {
-            Set::Move(_) => None,
-            Set::Prom(prom) => Some(prom),
-        }
-    }
-}
-
-/// Represents a collection of pseudo-legal moves:
-/// * Normal moves packed and labelled by piece.
-/// * Promotions packed by pawn.
-#[derive(Clone)]
-pub struct MoveSetTable {
-    move_len: usize, 
-    move_sets: [MaybeUninit<MoveSet>; 16],
-
-    prom_len: usize,
-    prom_sets: [MaybeUninit<PromSet>; 8],
-}
-
-impl MoveSetTable {
-    pub fn new() -> Self {
-        Self {
-            move_len: 0,
-            move_sets: [MaybeUninit::uninit(); 16],
-            prom_len: 0,
-            prom_sets: [MaybeUninit::uninit(); 8],
-        }
-    }
-
-    /// Append a piece's moveset to the end of the collection, if it isn't empty.
-    /// ### Panics:
-    /// Panics if greater than 16 sets are to be inserted.
-    #[inline]
-    pub fn push(&mut self, move_set: MoveSet) {
-        // don't bother inserting empty movesets
-        if move_set.to_set != 0 {
-            assert!(self.move_len < 16);
-            self.move_sets[self.move_len] = MaybeUninit::new(move_set);
-            self.move_len += 1;
-        }
-    }
-    /// Append a pawn's promotion set to the end of the collection, if it isn't empty.
-    /// ### Panics:
-    /// Panics if greater than 8 sets are to be inserted.
-    #[inline]
-    pub fn push_prom(&mut self, prom_set: PromSet) {
-        // don't bother inserting empty movesets
-        if prom_set.to_set != 0 {
-            assert!(self.prom_len < 8);
-            self.prom_sets[self.prom_len] = MaybeUninit::new(prom_set);
-            self.prom_len += 1;
-        }
-    }
-
-
-    /// Get a slice over all move sets.
-    #[inline]
-    pub fn get_move_sets(&self) -> &[MoveSet] {
-        unsafe {
-            // SAFETY: self.sets' elements up to self.len are initialized
-            &*(&self.move_sets[..self.move_len] as *const [_] as *const [_])
-            // fixme: use MaybeUninit::assume_slice_init method once stable?
-        }
-    }
-    /// Get a slice over promoting sets.
-    #[inline]
-    pub fn get_prom_sets(&self) -> &[PromSet] {
-        unsafe {
-            // SAFETY: self.prom_sets' elements up to self.prom_len are initialized
-            &*(&self.prom_sets[..self.prom_len] as *const [_] as *const [_])
-            // fixme: use MaybeUninit::assume_slice_init method once stable?
-        }
-    }
-}
-
-impl std::fmt::Debug for MoveSetTable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MoveSetTable")
-        .field("move_len", &self.move_len)
-        .field("move_sets", &self.get_move_sets())
-        .field("prom_len", &self.prom_len)
-        .field("prom_sets", &self.get_prom_sets())
-        .finish()
-    }
-}
-
-/// Variants:
-/// - `for_mov!($mov in $table => { });` - MoveSetTable iteration.
-/// - `for_mov!($mov in ai $table => { });` - exclude redundant promotions.
-/// - `for_mov!($mov in sq $set => { });` - Set iteration.
-/// - All: optionally takes a label, e.g. 
-/// `for_mov!($mov in $table until $'label => { ... break $'label; });`
-/// 
-/// Additionally of note, the macro is implemented with a two-level loop
-/// meaning that `continue` from the label, and `break` without it,
-/// will likely lead to unexpected behaviour.
-#[macro_export]
-macro_rules! for_mov {
-    ($mov:ident in $move_table:ident $(until $brk:lifetime)? => $blk:block) => {
-        $($brk:)? for prom_set in $move_table.get_prom_sets() {
-            for $mov in prom_set.iter() {
-                $blk
-            }
-        }
-        $($brk:)? for move_set in $move_table.get_move_sets() {
-            for $mov in move_set.iter() {
-                $blk
-            }
-        }
-    };
-    ($mov:ident in ai $move_table:ident $(until $brk:lifetime)? => $blk:block) => {
-        $($brk:)? for prom_set in $move_table.get_prom_sets() {
-            for $mov in prom_set.ai_iter() {
-                $blk
-            }
-        }
-        $($brk:)? for move_set in $move_table.get_move_sets() {
-            for $mov in move_set.iter() {
-                $blk
-            }
-        }
-    };
-    ($mov:ident in sq $set:ident $(until $brk:lifetime)? => $blk:block) => {
-        match self {
-            Set::Move(move_set) => {
-                $($brk:)? for $mov in move_set.iter() {
-                    $blk
-                }
-            },
-            Set::Prom(prom_set) => {
-                $($brk:)? for $mov in prom_set.iter() {
-                    $blk
-                }
-            },
-        }
-    };
 }

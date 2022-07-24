@@ -1,11 +1,11 @@
-use crate::{Board, Move, for_sq, board::fend, Piece, for_mov};
+use crate::{for_sq, Board, Move, board::fend, Piece};
 
 use super::SearchData;
 
 
 
-pub fn gen<'m, 'd, 'b, F>(mut f: F, board: &'b mut Board, depth: u8, data: &'d mut SearchData, pv: Option<Move>/* , prev_move: Move */)
-where F: FnMut(Move, &mut Board, &mut SearchData) -> bool {
+pub fn gen<'m, 'd, 'b, F>(mut f: F, board: &'b Board, depth: u8, data: &'d mut SearchData, pv: Option<Move>)
+where F: FnMut(Move, &Board, &mut SearchData) -> bool {
 
     // Map of prior issued moves: from-to butterfly
     let mut already_moved = [0u64; 64];
@@ -31,7 +31,7 @@ where F: FnMut(Move, &mut Board, &mut SearchData) -> bool {
         let (k1, k2) = data.killers[depth as usize];
         for k in [k1, k2] {
             if let Some(k) = k {
-                if board.is_valid_move(k) && board.is_move_legal(k) {
+                if board.is_valid(k) {
                     if already_moved[k.from_sq as usize] & 1 << k.to_sq == 0 {
                         if f(k, board, data) { return; }
                         already_moved[k.from_sq as usize] |= 1 << k.to_sq;
@@ -74,25 +74,17 @@ where F: FnMut(Move, &mut Board, &mut SearchData) -> bool {
                 for_sq!(asq in fend_fn(vsq, board.all) & lvas & board.actv => {
                     if already_moved[asq as usize] & 1 << vsq == 0 {
                         let mov = Move::new(asq, vsq, p);
-                        if board.is_move_legal(mov) && f(mov, board, data) { return; }
+                        if board.is_legal(mov) && f(mov, board, data) { return; }
                         already_moved[asq as usize] |= 1 << vsq;
                     }
                 });
             }
         });
     }
-    
-    //let move_buff_base = data.move_buff.len();
-    let mut move_table = crate::board::mov::MoveSetTable::new();
-    board.get_move_tab_actv(&mut move_table);
-    for_mov!(mov in ai move_table => {
-        if already_moved[mov.from_sq as usize] & 1 << mov.to_sq == 0 {
-            if board.is_move_legal(mov) {
-                /* data.move_buff.push(mov); */
-                if f(mov, board, data) {return;}
-            }
-            already_moved[mov.from_sq as usize] |= 1 << mov.to_sq;
-        }
+
+    board.for_mov(|mov| {
+        already_moved[mov.from_sq as usize] & 1 << mov.to_sq == 0
+        && f(mov, board, data)
     });
 
     //let move_buff_acme = data.move_buff.len(); 
@@ -128,8 +120,8 @@ where F: FnMut(Move, &mut Board, &mut SearchData) -> bool {
 
 
 
-pub fn gen_light<'m, 'd, 'b, F>(mut f: F, board: &'b mut Board, depth: u8, data: &'d mut SearchData, pv: Option<Move>/* , prev_move: Move */)
-where F: FnMut(Move, &mut Board, &mut SearchData) -> bool {
+pub fn gen_light<'m, 'd, 'b, F>(mut f: F, board: &'b Board, depth: u8, data: &'d mut SearchData, pv: Option<Move>)
+where F: FnMut(Move, &Board, &mut SearchData) -> bool {
 
     // Map of prior issued moves: from-to butterfly
     let mut already_moved = [0u64; 64];
@@ -139,7 +131,7 @@ where F: FnMut(Move, &mut Board, &mut SearchData) -> bool {
         if f(pv, board, data) { return; }
         already_moved[pv.from_sq as usize] |= 1 << pv.to_sq;
     }
-    
+
     let mvv_lva = [
         (board.queens,  Piece::Queen,  fend::queen_fend          as fn(u8, u64) -> u64), 
         (board.rooks,   Piece::Rook,   fend::rook_fend           as fn(u8, u64) -> u64), 
@@ -157,7 +149,7 @@ where F: FnMut(Move, &mut Board, &mut SearchData) -> bool {
                 for_sq!(asq in fend_fn(vsq, board.all) & lvas & board.actv => {
                     if already_moved[asq as usize] & 1 << vsq == 0 {
                         let mov = Move::new(asq, vsq, p);
-                        if board.is_move_legal(mov) && f(mov, board, data) { return; }
+                        if board.is_legal(mov) && f(mov, board, data) { return; }
                         already_moved[asq as usize] |= 1 << vsq;
                     }
                 });
@@ -170,7 +162,7 @@ where F: FnMut(Move, &mut Board, &mut SearchData) -> bool {
         let (k1, k2) = data.killers[depth as usize];
         for k in [k1, k2] {
             if let Some(k) = k {
-                if board.is_valid_move(k) && board.is_move_legal(k) {
+                if board.is_valid(k) {
                     if already_moved[k.from_sq as usize] & 1 << k.to_sq == 0 {
                         if f(k, board, data) { return; }
                         already_moved[k.from_sq as usize] |= 1 << k.to_sq;
@@ -182,28 +174,18 @@ where F: FnMut(Move, &mut Board, &mut SearchData) -> bool {
         data.killers.push((None, None));
     }
 
-    let mut move_table = crate::board::mov::MoveSetTable::new();
-    board.get_move_tab_actv(&mut move_table);
-    for_mov!(mov in ai move_table => {
-        if already_moved[mov.from_sq as usize] & 1 << mov.to_sq == 0 {
-            if board.is_move_legal(mov) && f(mov, board, data) { return; }
-            already_moved[mov.from_sq as usize] |= 1 << mov.to_sq;
-        }
+    board.for_mov(|mov| {
+        already_moved[mov.from_sq as usize] & 1 << mov.to_sq == 0
+        && f(mov, board, data)
     });
 }
 
 #[inline]
 pub fn gen_quesce<'m, 'd, 'b, F>(mut f: F, board: &'b Board, is_actv_in_check: bool)
 where F: FnMut(Move, &Board) -> bool {
-
+    
     if is_actv_in_check {
-        let mut move_table = crate::board::mov::MoveSetTable::new();
-        board.get_move_tab_actv(&mut move_table);
-
-        for_mov!(mov in ai move_table => {
-            if board.is_move_legal(mov) && f(mov, board) { return; }
-        });
-
+        board.for_mov(|mov| { f(mov, board) });
         return;
     }
 
@@ -222,7 +204,7 @@ where F: FnMut(Move, &Board) -> bool {
                 let (lvas, p, fend_fn) = mvv_lva[lva];
                 for_sq!(asq in fend_fn(vsq, board.all) & lvas & board.actv => {
                     let mov = Move::new(asq, vsq, p);
-                    if board.is_move_legal(mov) && f(mov, board) { return; }
+                    if board.is_legal(mov) && f(mov, board) { return; }
                 });
             }
         });

@@ -1,16 +1,16 @@
-use std::{thread, sync::{Arc, atomic::{AtomicBool, Ordering::SeqCst}}};
-
-use crossbeam_channel::Sender;
-use rayon::prelude::*;
-
-use crate::{Board, Move, for_mov, PosHashMap, board::zobrist::PosHashNode, search::{eval::eval, ttab::{SearchNode, ScoreKind}}};
-
-use self::ttab::{TransTable, TtData};
-
 pub mod movegen;
 pub mod eval;
 pub mod time;
 pub mod ttab;
+
+
+use std::sync::{Arc, atomic::{AtomicBool, Ordering::SeqCst}};
+use crossbeam_channel::Sender;
+use rayon::prelude::*;
+
+use crate::{Board, Move, PosHashMap, board::zobrist::PosHashNode};
+use ttab::{TransTable, TtData, SearchNode, ScoreKind};
+use eval::eval;
 
 
 /// Reported evaluation information.
@@ -42,20 +42,10 @@ pub fn search(
     pos_hash_map: Arc<PosHashMap>,
     kill_switch: Arc<AtomicBool>,
 ) {
-    let mut move_table = crate::board::mov::MoveSetTable::new();
-    board.get_move_tab_actv(&mut move_table);
     let mut moves = Vec::new();
-    for_mov!(mov in ai move_table => {
-        if board.is_move_legal(mov) {
-            moves.push((mov, 0));
-        }
-    });
+    board.for_mov(|mov| { moves.push((mov, 0)); false });
 
-    let thread_count = thread::available_parallelism().map_or(1, |nzu| nzu.get());
-    let thread_pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(thread_count)
-        .build()
-        .unwrap();
+    let thread_pool = rayon::ThreadPoolBuilder::new().build().unwrap();
 
     // Full PVS for root node search
     for draft in 2.. {
@@ -164,7 +154,7 @@ pub struct SearchData<'a> {
     pub move_buff: Vec<Move>, */
 }
 
-pub fn pvs(board: &mut Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mut SearchData, prev_phn: Option<&PosHashNode>) -> i16 {
+pub fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mut SearchData, prev_phn: Option<&PosHashNode>) -> i16 {
     if draft == 0 { return quesce(board, alpha, beta, 0, depth) ; }
     if draft >= 4 && data.kill_switch.load(SeqCst) { return -i16::MAX; }
 
@@ -206,11 +196,10 @@ pub fn pvs(board: &mut Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, d
     if draft > 3 {
         let material_eval = eval::basic_mat_eval(board);
         if !is_actv_in_check && material_eval >= 100 {
-            let en_passant = board.en_passant;
-            board.make_null();
-            let phn = PosHashNode::new(board.hash, prev_phn);
-            let null_score = pvs(board, -beta, -alpha, draft - 2, depth + 1, data, Some(&phn));
-            board.unmake_null(en_passant);
+            let mut b = board.clone();
+            b.make_null();
+            let phn = PosHashNode::new(b.hash, prev_phn);
+            let null_score = pvs(&b, -beta, -alpha, draft - 2, depth + 1, data, Some(&phn));
             if null_score >= beta { depth_reduct += 2; }
         }
     }
@@ -220,27 +209,26 @@ pub fn pvs(board: &mut Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, d
     let mut best_move = None;
     let mut move_count = 0;
     let mut legal_move_exists = false;
-    let thing = |mov: Move, board: &mut Board, data: &mut SearchData| -> bool {
-        /* if !board.is_move_legal(mov) { return false; } */
+    let thing = |mov: Move, board: &Board, data: &mut SearchData| -> bool {
         legal_move_exists = true;
         move_count += 1;
         if draft > 3 && move_count == 6 /* && !check_ext */ && !is_actv_in_check { depth_reduct += 1; }
 
-        let mut board = board.clone();
-        board.make(mov);
+        let mut b = board.clone();
+        b.make(mov);
         /* board.validate().unwrap(); */
         
         let mut score = -i16::MAX;
-        if is_pos_draw(&board, data.pos_hash_map, prev_phn) {
+        if is_pos_draw(&b, data.pos_hash_map, prev_phn) {
             score = eval::DRAW;
         } else {
             // else continue search
-            let phn = PosHashNode::new(board.hash, prev_phn);
+            let phn = PosHashNode::new(b.hash, prev_phn);
             if max != -i16::MAX {
-                score = -pvs(&mut board, -i16::MAX/* -alpha-1 */, -alpha, draft - depth_reduct, depth + 1, data, Some(&phn));
+                score = -pvs(&mut b, -i16::MAX/* -alpha-1 */, -alpha, draft - depth_reduct, depth + 1, data, Some(&phn));
             }
             if max == -i16::MAX || score >= alpha && score < beta {
-                score = -pvs(&mut board, -beta, -alpha, draft - 1, depth + 1, data, Some(&phn));
+                score = -pvs(&mut b, -beta, -alpha, draft - 1, depth + 1, data, Some(&phn));
             }
         }
         
@@ -326,9 +314,6 @@ fn quesce(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8) -> i16
         if max >= beta { return max; }
         if max > alpha { alpha = max; }
     }
-
-    let mut move_table = crate::board::mov::MoveSetTable::new();
-    board.get_move_tab_actv(&mut move_table);
 
     let mut quiet_position = true;
     let thing = |mov: Move, board: &Board| -> bool {

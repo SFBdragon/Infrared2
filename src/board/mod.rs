@@ -1,10 +1,7 @@
-use crate::for_mov;
-
 pub mod fend;
 pub mod mov;
 pub mod fen;
 pub mod zobrist;
-
 
 /// Flip the rank of a chess square index.
 pub const fn flip_sq(sq: u8) -> u8 {
@@ -167,14 +164,6 @@ impl Board {
     #[inline]
     pub fn is_idle_in_check(&self) -> bool {
         self.is_tile_cvrd_actv(self.idle_king_sq, self.all, self.actv)
-    }
-
-    /// Checks whether a generates pseudo-legal move is legal.
-    pub fn is_move_legal(&self, Move { from_sq, to_sq, piece }: Move) -> bool {
-        let king_sq = if let Piece::King = piece { to_sq } else { self.actv_king_sq };
-        let (from, to) = (1 << from_sq, 1 << to_sq);
-        let ep = if to & self.en_passant != 0 && piece == Piece::Pawn { to >> 0o10 } else { 0 }; // en passant
-        !self.is_tile_cvrd_idle(king_sq, self.all & !from & !ep | to, self.idle & !to & !ep) // move & capture
     }
 
     /// Flip the board. Does not update move counters.
@@ -424,19 +413,15 @@ impl Board {
 
     /// Check for stalemate and checkmate.
     pub fn is_mate(&self) -> Option<GameOver> {
-        let mut move_table = mov::MoveSetTable::new();
-        self.get_move_tab_actv(&mut move_table);
-        
         // if any move can be legally played, no mate
-        for_mov!(mov in move_table => {
-            if self.is_move_legal(mov) { return None; }
-        });
-
-        if self.is_actv_in_check() {
-            Some(GameOver::Checkmate)
-        } else {
-            Some(GameOver::Stalemate)
-        }
+        let mut legal_move_exists = false;
+        self.for_mov(|_| { legal_move_exists = true; true });
+        if legal_move_exists { return None; }
+        
+        Some(match self.is_actv_in_check() {
+            true => GameOver::Checkmate,
+            false => GameOver::Stalemate,
+        })
     }
     /// Check for fifty move rule and insufficient material.
     /// 
@@ -579,7 +564,7 @@ mod tests {
         assert_eq!(board, comparison);
     } */
 
-    #[test]
+    /* #[test]
     fn test_make_is_move_legal() {
         let fen1 = "r1bq1r1k/ppp2B1p/3n1n1b/4NPp1/4P3/3P4/PPPK2PP/RNBQ3R w - g6 0 1"; // en passant
         let fen2 = "r1bq1rk1/ppp1bB1p/3n1n2/4N3/4P1p1/3P4/PPP2PPP/RNBQ1RK1 b - - 0 1"; // captures and defends
@@ -612,5 +597,5 @@ mod tests {
                 }
             });
         }
-    }
+    } */
 }

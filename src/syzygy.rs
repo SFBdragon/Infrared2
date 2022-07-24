@@ -112,7 +112,7 @@ fn from_uci_move_str(board: &Board, mov: String) -> Option<Move> {
     
     let mov = Move::new(from_sq, to_sq, piece);
 
-    board.is_valid_move(mov).then_some(mov)
+    board.is_valid(mov).then_some(mov)
 }
 
 #[cfg(test)]

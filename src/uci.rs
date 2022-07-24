@@ -277,7 +277,7 @@ fn from_uci_move(board: &Board, mov: UciMove) -> Option<Move> {
     
     let mov = Move::new(from_sq, to_sq, piece);
 
-    match board.is_valid_move(mov) {
+    match board.is_valid(mov) {
         true => Some(mov),
         false => None,
     }
