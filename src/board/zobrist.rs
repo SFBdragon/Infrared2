@@ -84,7 +84,7 @@ pub const COLOUR_HASH: u64 = PRNS[COLOUR_OFFSET];
 impl Board {
     pub fn calc_hash(&self) -> u64 {
         let mut hash = 0;
-        let is_actv_white = self.colour == 1;
+        let is_actv_white = self.colour == crate::Side::White;
         
         if is_actv_white {
             hash ^= COLOUR_HASH;
@@ -114,6 +114,7 @@ impl Board {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct U64IdentHasher {
     hash: u64,
 }
@@ -132,6 +133,7 @@ impl std::hash::Hasher for U64IdentHasher {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct U64IdentHashBuilder;
 impl std::hash::BuildHasher for U64IdentHashBuilder {
     type Hasher = U64IdentHasher;

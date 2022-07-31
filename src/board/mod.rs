@@ -8,6 +8,30 @@ pub const fn flip_sq(sq: u8) -> u8 {
     sq ^ 0o70
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Side {
+    White = 1,
+    Black = 0,
+}
+impl Side {
+    #[inline]
+    pub fn is_white(self) -> bool {
+        matches!(self, Side::White)
+    }
+    #[inline]
+    pub fn is_black(self) -> bool {
+        matches!(self, Side::White)
+    }
+    #[inline]
+    pub fn flip(self) -> Self {
+        match self {
+            Side::White => Side::Black,
+            Side::Black => Side::White,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Move {
     pub from_sq: u8,
@@ -86,8 +110,8 @@ pub struct Board {
     pub move_count: u16,
     /// Count plies to 100 since the last capture or pawn-advance.
     pub fifty_move_clock: u16,
-    /// `1` is white, `-1` is black.
-    pub colour: i8,
+    /// Side to move.
+    pub colour: Side,
     /// `next`'s castling capabilities.
     pub actv_castle_rights: CastleRights,
     /// `prev`'s castling capabilities.
@@ -169,7 +193,7 @@ impl Board {
     /// Flip the board. Does not update move counters.
     #[inline]
     pub fn flip(&mut self) {
-        self.colour = -self.colour;
+        self.colour = self.colour.flip();
         
         self.pawns = self.pawns.swap_bytes();
         self.knights = self.knights.swap_bytes();
@@ -189,7 +213,7 @@ impl Board {
     /// 
     /// Note that legality is not checked.
     pub fn make(&mut self, Move { from_sq, to_sq, piece }: Move) /* -> Unmake */ {
-        let is_actv_white = self.colour == 1;
+        let is_actv_white = self.colour.is_white();
         let from = 1u64 << from_sq;
         let to = 1u64 << to_sq;
 
@@ -320,7 +344,7 @@ impl Board {
 
         // bookkeeping
         self.flip();
-        self.move_count += (self.colour + 1) as u16 >> 1;
+        self.move_count += self.colour as u16;
 
         /* unmake */
     }
@@ -400,13 +424,13 @@ impl Board {
     /// Play a null move and flip the player turn.
     pub fn make_null(&mut self) {
         self.flip();
-        self.move_count += (self.colour + 1) as u16 >> 1;
+        self.move_count += self.colour as u16;
         self.fifty_move_clock += 1;
     }
     /// Undo a null move and flip the player turn.
     pub fn unmake_null(&mut self, en_passant: u64) {
         self.flip();
-        self.move_count -= (self.colour + 1) as u16 >> 1;
+        self.move_count -= self.colour as u16;
         self.fifty_move_clock -= 1;
         self.en_passant = en_passant;
     }
@@ -531,7 +555,6 @@ impl Board {
         as_result!(!self.is_idle_in_check())?;
 
         // validate misc data as best as possible
-        as_result!(self.colour.abs() == 1)?;
         as_result!(self.hash == self.calc_hash())?;
         as_result!(self.fifty_move_clock <= (self.move_count - 1) * 2 + 1)?;
 

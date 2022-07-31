@@ -1,5 +1,7 @@
 //! Chess board and move string coding and conversion.
 
+use crate::Side;
+
 use super::{Piece, Board};
 
 
@@ -70,7 +72,7 @@ impl Board {
             idle_king_sq: 0,
             en_passant: 0,
             move_count: move_count.parse::<u16>().map_err(|_| "Move counter parse failed")?,
-            colour: 1,
+            colour: Side::White,
             fifty_move_clock: fifty_move_clock.parse::<u16>().map_err(|_| "Fifty move clock parse failed")?,
             actv_castle_rights: super::CastleRights::empty(),
             idle_castle_rights: super::CastleRights::empty(),
@@ -148,7 +150,7 @@ impl Board {
 
         // ensure actv is white and idle is black
         let mut board = self.clone();
-        if board.colour == -1 { board.flip(); }
+        if board.colour == Side::Black { board.flip(); }
 
         for rank in (0..8).rev() { // fen ranks are in reverse order
             let mut rank_str = String::new();
@@ -193,7 +195,7 @@ impl Board {
         }
         fen.push(' ');
 
-        fen.push(if self.colour == 1 { 'w' } else { 'b' });
+        fen.push(if self.colour == Side::White { 'w' } else { 'b' });
         fen.push(' ');
 
         if (board.actv_castle_rights | board.idle_castle_rights) == super::CastleRights::empty() {

@@ -1,8 +1,9 @@
 use std::{mem::{size_of, MaybeUninit}, cell::UnsafeCell, sync::atomic::{AtomicBool, Ordering}};
 
 /// Transposition Table.
-pub struct TransTable {
+pub struct TransTable { 
     data: Box<[TtBucket]>,
+    // trans rights!
 }
 
 unsafe impl Send for TransTable {}

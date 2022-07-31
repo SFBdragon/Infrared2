@@ -3,7 +3,7 @@ use std::time::Duration;
 use crossbeam_channel::Sender;
 use serde::Deserialize;
 
-use crate::{Board, Move, search::SearchInfo};
+use crate::{Board, Move, Side, SearchInfo};
 
 
 #[derive(Debug, Clone, Deserialize)]
@@ -57,30 +57,32 @@ pub fn query_table_data(board: &Board, timeout: Duration) -> Option<SyzygyData> 
     Some(syzygy)
 }
 
-/// Returns the best move ala Syzygy Tablebase as a UCI move string.
+/// Returns the best move ala Syzygy Tablebase, if available.
 pub fn query_table_best_uci(board: Board, info_sndr: Sender<(SearchInfo, bool)>) {
     use crate::search::{SearchEval, eval};
 
     if let Some(syzygy) = query_table_data(&board, Duration::from_secs(10)) {
         if let Some(mov) = syzygy.moves.first().and_then(|m| from_uci_move_str(&board, m.uci.clone())) {
-            info_sndr.send((SearchInfo {
-                eval: match syzygy.dtm {
-                    Some(dtm) if dtm.abs() <= 128 => SearchEval::Mate(dtm as i8),
-                    _ => match syzygy.category.as_str() {
-                        "win" => SearchEval::Normal(-eval::MATE),
-                        "maybe-win" => SearchEval::Normal(-eval::MATE),
-                        "cursed-win" => SearchEval::Normal(-eval::MATE),
-                        "draw" => SearchEval::Normal(eval::DRAW),
-                        "blessed-loss" => SearchEval::Normal(eval::MATE),
-                        "maybe-loss" => SearchEval::Normal(eval::MATE),
-                        "loss" => SearchEval::Normal(eval::MATE),
-                        _ => SearchEval::Normal(eval::DRAW),
-                    },
+            let eval = match syzygy.dtm {
+                Some(dtm) if dtm.abs() <= 128 => SearchEval::Mate(dtm as i8),
+                _ => match syzygy.category.as_str() {
+                    "win" => SearchEval::Normal(-eval::MATE),
+                    "maybe-win" => SearchEval::Normal(-eval::MATE),
+                    "cursed-win" => SearchEval::Normal(-eval::MATE),
+                    "draw" => SearchEval::Normal(eval::DRAW),
+                    "blessed-loss" => SearchEval::Normal(eval::MATE),
+                    "maybe-loss" => SearchEval::Normal(eval::MATE),
+                    "loss" => SearchEval::Normal(eval::MATE),
+                    _ => SearchEval::Normal(eval::DRAW),
                 },
-                best: mov,
+            };
+            let info = SearchInfo {
+                /// only report on the best move, as it's the only that's been 'evaluated'
+                evals: vec![(mov, eval)],
                 depth: 0,
                 sel_depth: 0,
-            }, true)).unwrap();
+            };
+            info_sndr.send((info, true)).unwrap();
         }
     }
 }
@@ -96,7 +98,7 @@ fn from_uci_move_str(board: &Board, mov: String) -> Option<Move> {
 
     let mut from_sq = (mov[0] - b'a') + (mov[1] - b'1') * 8;
     let mut to_sq   = (mov[2] - b'a') + (mov[3] - b'1') * 8;
-    if board.colour != 1 {
+    if board.colour == Side::Black {
         from_sq = crate::board::flip_sq(from_sq);
         to_sq = crate::board::flip_sq(to_sq);
     }
