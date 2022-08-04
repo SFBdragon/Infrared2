@@ -1,6 +1,6 @@
 use std::{fs::File, io::Write};
 
-use infra::{Board, Move, Piece, for_mov, board::flip_sq};
+use infra::{Board, Move, Piece, Side, board::flip_sq};
 use pgn_reader::{Visitor, Role, Outcome, Color};
 use id_tree::*;
 
@@ -158,11 +158,13 @@ impl Visitor for MyVisitor {
     }
 
     fn san(&mut self, san_plus: pgn_reader::SanPlus) {
-        if self.board.move_count > 10 || self.parse_failed { return; }
+        if self.board.move_count > 14 || self.parse_failed { return; }
 
         if let Some(mov) = parse_san(&self.board, san_plus) {
             self.data.push((self.board.hash, mov));
+            self.board.validate().unwrap();
             self.board.make(mov);
+            if let Err(e) = self.board.validate() { panic!("{}\n{:?}\n{}\n{:?}\n\n", e, mov, self.board.to_fen(), &self.board); }
         } else {
             self.parse_failed = true;
         }
@@ -204,79 +206,62 @@ fn role_to_piece(role: Role) -> Piece {
 }
 
 fn parse_san(board: &Board, san_plus: pgn_reader::SanPlus) -> Option<Move> {
-    let is_white_actv = board.colour == 1;
+    let is_white_actv = board.colour == Side::White;
     match san_plus.san {
         pgn_reader::San::Normal { role, file, rank, capture, to, promotion } => {
-            let mut tab = infra::board::mov::MoveSetTable::new();
-            board.get_role_move_tab_actv(role_to_piece(role), &mut tab);
-
-            for_mov!(mov in tab => {
-                if board.is_move_legal(mov) {
-                    let to_sq = if is_white_actv { mov.to_sq } else { flip_sq(mov.to_sq) };
-                    if to_sq % 8 == to.file().char() as u8 - b'a' {
-                        if to_sq / 8 == to.rank().char() as u8 - b'1' {
-                            if let Some(prom) = promotion {
-                                if mov.piece != role_to_piece(prom) { continue; }
-                            }
-                            if capture {
-                                if board.get_piece_at(1 << mov.to_sq).is_none() 
-                                && board.en_passant & (1 << mov.to_sq) == 0 { continue; }
-                            }
-                            let from_sq = if is_white_actv { mov.from_sq } else { flip_sq(mov.from_sq) };
-                            if let Some(from_file) = file {
-                                if from_sq % 8 != from_file.char() as u8 - b'a' { continue; }
-                            }
-                            if let Some(from_rank) = rank {
-                                if from_sq / 8 != from_rank.char() as u8 - b'1' { continue; }
-                            }
-
-                            return Some(mov);
+            let mut decode: Option<Move> = None;
+            board.for_role_mov(role_to_piece(role), |mov| {
+                let to_sq = if is_white_actv { mov.to_sq } else { flip_sq(mov.to_sq) };
+                if to_sq % 8 == to.file().char() as u8 - b'a' {
+                    if to_sq / 8 == to.rank().char() as u8 - b'1' {
+                        if let Some(prom) = promotion {
+                            if mov.piece != role_to_piece(prom) { return false; }
                         }
+                        if capture {
+                            if board.get_piece_at(1 << mov.to_sq).is_none() 
+                            && board.en_passant & (1 << mov.to_sq) == 0 { return false; }
+                        }
+                        let from_sq = if is_white_actv { mov.from_sq } else { flip_sq(mov.from_sq) };
+                        if let Some(from_file) = file {
+                            if from_sq % 8 != from_file.char() as u8 - b'a' { return false; }
+                        }
+                        if let Some(from_rank) = rank {
+                            if from_sq / 8 != from_rank.char() as u8 - b'1' { return false; }
+                        }
+
+                        decode = Some(mov);
+                        return true;
                     }
                 }
+                false
             });
+            return decode;
         },
         pgn_reader::San::Put { role, to } => {
-            let mut tab = infra::board::mov::MoveSetTable::new();
-            board.get_role_move_tab_actv(role_to_piece(role), &mut tab);
-
-            for_mov!(mov in tab => {
-                if board.is_move_legal(mov) {
-                    let to_sq = if is_white_actv { mov.to_sq } else { flip_sq(mov.to_sq) };
-                    if to_sq % 8 == to.file().char() as u8 - b'a' {
-                        if to_sq / 8 == to.rank().char() as u8 - b'1' {
-                            return Some(mov);
-                        }
+            let mut decode: Option<Move> = None;
+            board.for_role_mov(role_to_piece(role), |mov| {
+                let to_sq = if is_white_actv { mov.to_sq } else { flip_sq(mov.to_sq) };
+                if to_sq % 8 == to.file().char() as u8 - b'a' {
+                    if to_sq / 8 == to.rank().char() as u8 - b'1' {
+                        decode = Some(mov);
+                        return true;
                     }
                 }
+                false
             });
+            return decode;
         },
         pgn_reader::San::Castle(side) => {
-            let mov;
-            match side {
-                pgn_reader::CastlingSide::KingSide => {
-                    mov = Move::new(4, 6, Piece::King);
-                },
-                pgn_reader::CastlingSide::QueenSide => {
-                    mov = Move::new(4, 2, Piece::King);
-                },
-            }
-
-            
-            let mut tab = infra::board::mov::MoveSetTable::new();
-            board.get_role_move_tab_actv(Piece::King, &mut tab);
-
-            for_mov!(king_move in tab => {
-                if board.is_move_legal(king_move) {
-                    if mov == king_move {
-                        return Some(king_move);
-                    }
-                }
-            });
+            let mov = match side {
+                pgn_reader::CastlingSide::KingSide => Move::new(4, 6, Piece::King),
+                pgn_reader::CastlingSide::QueenSide => Move::new(4, 2, Piece::King),
+            };
+            let mut decode = None;
+            board.for_role_mov(Piece::King, |m| { if m == mov { decode = Some(m); } m == mov });
+            return decode;
         },
         pgn_reader::San::Null => eprintln!("Null move?"),
     }
 
     None
 }
-

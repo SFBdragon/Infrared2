@@ -8,7 +8,7 @@ use std::{sync::{Arc, atomic::AtomicBool}, thread::JoinHandle};
 pub use board::{Move, Board, Side, Piece, GameOver};
 pub use search::{SearchInfo, SearchEval, ttab::TransTable, time::TimeControl};
 
-use crossbeam_channel::Receiver;
+use crossbeam_channel::Sender;
 use board::zobrist::{PosHashMap, U64IdentHashBuilder};
 
 
@@ -43,6 +43,8 @@ macro_rules! for_sq {
     };
 }
 
+
+
 #[derive(Debug, Clone)]
 pub struct Game {
     /// Game beginning position.
@@ -74,31 +76,7 @@ impl Game {
     /// 
     /// Returns `Err` variant when a move is invalid, returning the relevant position and move.
     pub fn new(begin_pos: Board, move_list: Vec<Move>) -> Result<Self, (Board, Move)> {
-        let mut position = begin_pos.clone();
-        let mut prev_hashes = PosHashMap::with_hasher(U64IdentHashBuilder);
-        let mut book_distance = None;
-
-        for i in 0..=move_list.len() {
-            Self::update_hash_data(&mut book_distance, &mut prev_hashes, position.hash);
-
-            if i == move_list.len() { break; }
-
-            // Make move
-            let mov = move_list[i];
-            if position.is_valid(mov) {
-                position.make(mov);
-            } else {
-                return Err((position, mov));
-            }
-        }
-
-        Ok(Self {
-            begin_pos,
-            position,
-            move_list,
-            prev_hashes,
-            book_distance,
-        })
+        Self::with_coded(begin_pos, move_list, |m, _| *m)
     }
     
     /// Create a chess game, given another move coding.
@@ -126,6 +104,8 @@ impl Game {
                 return Err((position, mov));
             }
         }
+
+        position.validate().unwrap();
 
         Ok(Self {
             begin_pos,
@@ -169,8 +149,11 @@ impl Game {
     }
 
 
-    pub fn search(&self, time_control: TimeControl, trans_table: Option<Arc<TransTable>>) -> SearchHandle {
-        let (info_sndr, info_receiver) = crossbeam_channel::unbounded();
+    pub fn search(&self,
+        time_control: TimeControl, 
+        trans_table: Option<Arc<TransTable>>, 
+        info_sndr: Sender<(SearchInfo, bool)>
+    ) -> SearchHandle {
         let kill_switch = Arc::new(AtomicBool::new(false));
 
         let thread_game = self.clone();
@@ -188,14 +171,12 @@ impl Game {
             )
         });
 
-        SearchHandle { info_receiver, kill_switch, thread_handle }
+        SearchHandle { kill_switch, thread_handle }
     }
 }
 
 #[derive(Debug)]
 pub struct SearchHandle {
-    /// Receives `SearchInfo` and finality respectively from engine.
-    pub info_receiver: Receiver<(SearchInfo, bool)>,
     /// Set the switch to kill the engine at any time (do not clear).
     pub kill_switch: Arc<AtomicBool>,
     /// Handle to the engine thread.

@@ -31,8 +31,8 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
         let (k1, k2) = data.killers[depth as usize];
         for k in [k1, k2] {
             if let Some(k) = k {
-                if board.is_valid(k) {
-                    if already_moved[k.from_sq as usize] & 1 << k.to_sq == 0 {
+                if already_moved[k.from_sq as usize] & 1 << k.to_sq == 0 {
+                    if board.is_valid(k) {
                         if f(k, board, data) { return; }
                         already_moved[k.from_sq as usize] |= 1 << k.to_sq;
                     }

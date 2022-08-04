@@ -226,21 +226,49 @@ impl TimeManager {
                         Some(time)
                     }
                 } else {
-                    // no score yet established; likely search explosion? allocate all time
-                    Some(self.maximum_time)
+                    None
                 }
             } else {
-                None
+                // no score yet established; likely search explosion? allocate all time
+                Some(self.maximum_time)
             }
         }
         
         // check if elapsed is a significant fraction of allocated
         else if search_time > self.allocated_time.mul_f64(MIN_SEARCH) {
             // handle the case of an obvious recapture
-            let is_recapture = self.recapture_sq.map_or(false, |sq| sq == pv.to_sq);
-            if pv_diff > DECISIVE_PV_DIFF && is_recapture { return None; }
+            if self.recapture_sq.map_or(false, |sq| sq == pv.to_sq) {
+                if pv_diff > DECISIVE_PV_DIFF { return None; }
+            }
         }
 
         Some(self.allocated_time.mul_f64(SEARCH_OVERSHOOT))
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    pub fn test_allocate_time() {
+        let inf = TimeControl::Infinite;
+        assert_eq!(inf.allocate_time(None), AllocatedTime::Forever);
+
+        let mt = TimeControl::MoveTime(Duration::from_secs_f64(1.5));
+        assert_eq!(mt.allocate_time(None), AllocatedTime::Fixed(Duration::from_secs_f64(1.5)));
+
+        let mut moves_left = 40;
+        let mut time_left = Duration::from_secs_f64(400.0);
+        while moves_left > 0 {
+            let allcd = TimeControl::TimeLeft { time_left, increment: None, moves_left: Some(moves_left) }.allocate_time(Some(40 - moves_left));
+            eprintln!("{:?}", allcd);
+            moves_left -= 1;
+            if let AllocatedTime::Fancy { time, cutoff: _ } = allcd {
+                time_left -= time;
+            }
+        }
+        panic!();
     }
 }

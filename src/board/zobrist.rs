@@ -75,7 +75,7 @@ pub const fn get_hash_qs_castle(colour: bool) -> u64 {
 }
 pub const fn get_hash_en_passant(en_passant: u64) -> u64 {
     if en_passant == 0 { return 0; }
-    PRNS[EP_FILE_OFFSET + (en_passant % 8) as usize]
+    PRNS[EP_FILE_OFFSET + (en_passant.trailing_zeros() % 8) as usize]
 }
 pub const COLOUR_HASH: u64 = PRNS[COLOUR_OFFSET];
 

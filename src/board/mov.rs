@@ -9,6 +9,7 @@ use crate::{
 pub const PAWN_PROM_RANK: u64 = 0x00FF000000000000;
 
 impl Board {
+    /// Generates pseudo-legal pawn moves.
     #[inline]
     fn pawn_moves(&self, sq: u8) -> MoveSet {
         let mut to_set = 0u64;
@@ -25,6 +26,7 @@ impl Board {
         MoveSet { to_set, from_sq: sq, piece: Piece::Pawn }
     }
 
+    /// Generates pseudo-legal promotions.
     #[inline]
     fn pawn_proms(&self, sq: u8) -> PromSet {
         let mut to_set = 0u64;
@@ -39,6 +41,7 @@ impl Board {
         PromSet { to_set, from_sq: sq }
     }
 
+    /// Generates pseudo-legal knight moves.
     #[inline]
     fn knight_moves(&self, sq: u8) -> MoveSet {
         MoveSet {
@@ -48,6 +51,7 @@ impl Board {
         }
     }
 
+    /// Generates pseudo-legal bishop moves.
     #[inline]
     fn bishop_moves(&self, sq: u8) -> MoveSet {
         MoveSet {
@@ -57,6 +61,7 @@ impl Board {
         }
     }
 
+    /// Generates pseudo-legal rook moves.
     #[inline]
     fn rook_moves(&self, sq: u8) -> MoveSet {
         MoveSet {
@@ -66,6 +71,7 @@ impl Board {
         }
     }
 
+    /// Generates pseudo-legal queen moves.
     #[inline]
     fn queen_moves(&self, sq: u8) -> MoveSet {
         MoveSet {
@@ -77,7 +83,7 @@ impl Board {
 
     /// Generates legal king moves only.
     fn king_moves(&self) -> MoveSet {
-        // calculate all covered squares by idle (except king-covered)
+        // calculate all covered squares by idle
         let mut idle_fend = 0;
         idle_fend |= fend::king_fend(self.idle_king_sq); 
         idle_fend |= fend::pawns_fend_idle(self.pawns & self.idle);
@@ -91,10 +97,10 @@ impl Board {
 
         // castling
         if self.actv_castle_rights.contains(CastleRights::KINGSIDE) {
-            if self.all & 0x60 == 0 && idle_fend & 0x70 != 0 { to |= 0x40; }
+            if self.all & 0x60 == 0 && idle_fend & 0x70 == 0 { to |= 0x40; }
         }
         if self.actv_castle_rights.contains(CastleRights::QUEENSIDE) {
-            if self.all &  0xE == 0 && idle_fend & 0x1C != 0 { to |= 0x4; }
+            if self.all &  0xE == 0 && idle_fend & 0x1C == 0 { to |= 0x4; }
         }
         
         MoveSet { from_sq: self.actv_king_sq, to_set: to, piece: Piece::King }
@@ -103,7 +109,7 @@ impl Board {
     /// Generate all legal moves until closure returns true.
     #[inline]
     pub fn for_mov<F: FnMut(Move) -> bool>(&self, mut f: F) {
-        // while seemingly ripe for refactor, note: return embedment; highly layered closures tank search perf; column associativity -> maintainability
+        // while seemingly ripe for refactor, note: return embedding; highly layered closures tank search perf; column associativity -> maintainability
         for_sq!(sq in self.pawns & self.actv &  PAWN_PROM_RANK => for m in self.pawn_proms  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
         for_sq!(sq in self.pawns & self.actv & !PAWN_PROM_RANK => for m in self.pawn_moves  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
         for_sq!(sq in self.knights & self.actv                 => for m in self.knight_moves(sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
@@ -113,7 +119,21 @@ impl Board {
         /* programming is an art! */                              for m in self.king_moves  (  ).iter() { if                     (&mut f)(m) { return } }
     }
     
-    /// Checks whether a generates pseudo-legal move is legal.
+    /// Generate all legal moves until closure returns true.
+    #[inline]
+    pub fn for_role_mov<F: FnMut(Move) -> bool>(&self, role: Piece, mut f: F) {
+        match role {
+            Piece::Pawn =>   { for_sq!(sq in self.pawns & self.actv &  PAWN_PROM_RANK => for m in self.pawn_proms  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+                               for_sq!(sq in self.pawns & self.actv & !PAWN_PROM_RANK => for m in self.pawn_moves  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
+            Piece::Knight => { for_sq!(sq in self.knights & self.actv                 => for m in self.knight_moves(sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
+            Piece::Bishop => { for_sq!(sq in self.bishops & self.actv                 => for m in self.bishop_moves(sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
+            Piece::Rook =>   { for_sq!(sq in self.rooks & self.actv                   => for m in self.rook_moves  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
+            Piece::Queen =>  { for_sq!(sq in self.queens & self.actv                  => for m in self.queen_moves (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
+            Piece::King =>   {                                                           for m in self.king_moves  (  ).iter() { if                     (&mut f)(m) { return } };  },
+        }
+    }
+    
+    /// Checks whether a generated pseudo-legal move is legal.
     pub fn is_legal(&self, Move { from_sq, to_sq, piece }: Move) -> bool {
         let king_sq = if let Piece::King = piece { to_sq } else { self.actv_king_sq };
         let (from, to) = (1 << from_sq, 1 << to_sq);
@@ -195,8 +215,8 @@ impl PromSet {
         PromSetIter {
             from_sq: self.from_sq,
             to_set: self.to_set,
-            to_sq: 0,
-            piece_index: 0,
+            to_sq: 64,
+            piece_index: PROM_PIECES.len(),
         }
     }
 }
@@ -231,13 +251,13 @@ pub struct PromSetIter {
     to_sq: u8, 
     piece_index: usize,
 }
+const PROM_PIECES: [Piece; 4] = [Piece::Queen, Piece::Knight, Piece::Rook, Piece::Bishop];
 
 impl Iterator for PromSetIter {
     type Item = Move;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        const PROM_PIECES: [Piece; 4] = [Piece::Queen, Piece::Knight, Piece::Rook, Piece::Bishop];
 
         if self.piece_index == PROM_PIECES.len() {
             if self.to_set == 0 {

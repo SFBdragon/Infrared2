@@ -148,9 +148,12 @@ impl Board {
     pub fn to_fen(&self) -> String {
         let mut fen = String::new();
 
-        // ensure actv is white and idle is black
+        // make actv white and idle black
         let mut board = self.clone();
-        if board.colour == Side::Black { board.flip(); }
+        if board.colour == Side::Black {
+            board.flip();
+            board.en_passant = board.en_passant.swap_bytes();
+        }
 
         for rank in (0..8).rev() { // fen ranks are in reverse order
             let mut rank_str = String::new();

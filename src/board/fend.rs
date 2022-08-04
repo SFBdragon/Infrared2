@@ -255,9 +255,9 @@ pub static BISHOP_MAGIC_DATA: [(usize, u64, u64, u32); 64] = [
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    /* use super::*;
 
-    /* #[test]
+    #[test]
     pub fn test_pawns_fend_mask_actv() {
         assert_eq!(pawns_moves_actv(0x8000010010000081), 0x2002800004200);
     }

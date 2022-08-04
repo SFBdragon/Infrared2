@@ -5,9 +5,9 @@ use serde::Deserialize;
 
 use crate::{Board, Move, Side, SearchInfo};
 
-
+#[allow(unused)]
 #[derive(Debug, Clone, Deserialize)]
-pub struct SyzygyData {
+struct RawSyzygyData {
     /// Distance to zeroing the fifty move clock.
     pub dtz: Option<i32>,
     pub precise_dtz: Option<i32>,
@@ -22,11 +22,12 @@ pub struct SyzygyData {
     pub category: String,
 
     /// Moves, best first.
-    pub moves: Vec<SyzygyMove>,
+    pub moves: Vec<RawSyzygyMove>,
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone, Deserialize)]
-pub struct SyzygyMove {
+struct RawSyzygyMove {
     pub uci: String,
     pub san: String,
 
@@ -44,21 +45,20 @@ pub struct SyzygyMove {
     pub category: String,
 }
 
-
-pub fn query_table_data(board: &Board, timeout: Duration) -> Option<SyzygyData> {
+fn query_table_data(board: &Board, timeout: Duration) -> Option<RawSyzygyData> {
     if board.all.count_ones() > 7 { return None; }
     let fen = board.to_fen();
 
     let url = format!("http://tablebase.lichess.ovh/standard?fen={}", fen);
     let response = ureq::get(url.as_str()).timeout(timeout).call().ok()?;
     let content = response.into_reader();
-    let syzygy = serde_json::from_reader::<_, SyzygyData>(content).ok()?;
+    let syzygy = serde_json::from_reader::<_, RawSyzygyData>(content).ok()?;
     
     Some(syzygy)
 }
 
 /// Returns the best move ala Syzygy Tablebase, if available.
-pub fn query_table_best_uci(board: Board, info_sndr: Sender<(SearchInfo, bool)>) {
+pub fn uci_syzygy_query(board: &Board, info_sndr: Sender<SearchInfo>) {
     use crate::search::{SearchEval, eval};
 
     if let Some(syzygy) = query_table_data(&board, Duration::from_secs(10)) {
@@ -82,7 +82,7 @@ pub fn query_table_best_uci(board: Board, info_sndr: Sender<(SearchInfo, bool)>)
                 depth: 0,
                 sel_depth: 0,
             };
-            info_sndr.send((info, true)).unwrap();
+            info_sndr.send(info).unwrap();
         }
     }
 }

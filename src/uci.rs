@@ -1,15 +1,23 @@
 use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, io::Write};
 
-use infra::{Move, Board, Piece, SearchInfo, SearchEval, TransTable, Game, SearchHandle, Side};
-use crossbeam_channel::Sender;
+use infra::{Move, Board, Piece, SearchInfo, SearchEval, TransTable, Game, SearchHandle, Side, opening, TimeControl};
+use crossbeam_channel::{Sender, Receiver};
 use vampirc_uci::{
     UciMessage, 
     CommunicationDirection,
     UciMove, 
     UciPiece, 
     UciSquare, 
-    UciInfoAttribute, UciFen,
+    UciInfoAttribute, UciFen, UciTimeControl,
 };
+
+
+struct SearchControl {
+    search_handle: SearchHandle,
+    search_rcvr: Receiver<(SearchInfo, bool)>,
+    syzygy_rcvr: Receiver<SearchInfo>,
+}
+
 
 fn read_stdin(sender: Sender<String>) {
     loop {
@@ -26,7 +34,7 @@ pub fn uci() {
     // Transposition table is only reset on newgames
     let mut trans_table = Arc::new(TransTable::default());
 
-    let mut search_handle: Option<SearchHandle> = None;
+    let mut search_control: Option<SearchControl> = None;
 
     // UCI requires that the position be recalled across messages
     let mut position: Option<Game> = None;
@@ -40,14 +48,33 @@ pub fn uci() {
 
     
     'event: loop {
-        let selector = crossbeam_channel::Select::new();
+        let mut selector = crossbeam_channel::Select::new();
         let stdin_index = selector.recv(&stdin_rcvr);
-        let info_index = search_handle.map(|sh| selector.recv(&sh.info_receiver));
+        let mut search_info_index = None;
+        let mut syzygy_info_index = None;
+        if let Some(sc) = search_control.as_ref() {
+            search_info_index = Some(selector.recv(&sc.search_rcvr));
+            syzygy_info_index = Some(selector.recv(&sc.syzygy_rcvr));
+        }
         let operation_index = selector.ready();
 
-        if info_index.is_some() && operation_index == info_index.unwrap() {
-            if let Ok((info, is_final)) = search_handle.unwrap().info_receiver.try_recv() {
-                best_move = uci_search_info(&position.as_ref().unwrap().position, info, is_final); // todo: fix?
+        if search_info_index.is_some() && operation_index == search_info_index.unwrap() {
+            let search_control_ref = search_control.as_ref().unwrap();
+            if let Ok((info, is_final)) = search_control_ref.search_rcvr.try_recv() {
+                best_move = uci_search_info(&position.as_ref().unwrap().position, info, is_final);
+                if is_final {
+                    search_control_ref.search_handle.kill_switch.store(true, Ordering::SeqCst);                
+                    search_control = None;
+                    best_move = None;
+                }
+            }
+        } else if syzygy_info_index.is_some() && operation_index == syzygy_info_index.unwrap() {
+            let search_control_ref = search_control.as_ref().unwrap();
+            if let Ok(info) = search_control_ref.syzygy_rcvr.try_recv() {
+                uci_search_info(&position.as_ref().unwrap().position, info, true);
+                search_control_ref.search_handle.kill_switch.store(true, Ordering::SeqCst);
+                search_control = None;
+                best_move = None;
             }
         } else if operation_index == stdin_index {
             if let Ok(input) = stdin_rcvr.try_recv() {
@@ -65,50 +92,74 @@ pub fn uci() {
                             uci_register()
                         }
                         UciMessage::UciNewGame => {
-                            if let Some(sh) = search_handle {
-                                sh.kill_switch.store(true, Ordering::SeqCst);
+                            if let Some(sc) = std::mem::replace(&mut search_control, None) {
+                                sc.search_handle.kill_switch.store(true, Ordering::SeqCst);
                             }
-                            search_handle = None;
                             position = None;
                             best_move = None;
                             trans_table = Arc::new(TransTable::default());
                         }
                         UciMessage::Position { startpos, fen, moves } => {
-                            
+                            search_control = None;
+                            best_move = None;
                             position = uci_position(startpos, fen, moves)
                         }
-                        UciMessage::Go { time_control: _, search_control: _ } => {
-                            position.as_ref().unwrap().validate().unwrap();
+                        UciMessage::Go { time_control, search_control: _ } => {
+                            search_control = None;
 
-                            
-
-                            // syzygy query thread (auto checks piece count)
-                            let pos = position.clone().unwrap();
-                            let sis = search_sndr.clone();
-                            thread::spawn(move ||
-                                infra::syzygy::query_table_best_uci(
-                                    pos,
-                                    sis,
-                                )
-                            );
-
-                            if let Some(mov) = infra::opening::query_book_best(position.as_ref().unwrap().hash) {
-                                // opening book!
-                                print!("{}\n", UciMessage::BestMove {
-                                    best_move: to_uci_move(position.as_ref().unwrap(), mov),
-                                    ponder: None,
-                                }.to_string());
-                                std::io::stdout().flush().expect("stdout flush error");
-                            } else {
-                                // search!
+                            if let Some(game) = &position {
+                                let (sndr, search_rcvr) = crossbeam_channel::unbounded();
                                 
+                                // syzygy query thread (auto checks piece count)
+                                let syzygy_board = game.position.clone();
+                                let (syzygy_sndr, syzygy_rcvr) = crossbeam_channel::bounded(1);
+                                thread::spawn(move || {
+                                    let syzygy_board = syzygy_board;
+                                    infra::syzygy::uci_syzygy_query(
+                                        &syzygy_board,
+                                        syzygy_sndr,
+                                    );
+                                });
+    
+                                if let Some(mov) = opening::query_book_best(game.position.hash) {
+                                    // opening book!
+                                    print!("{}\n", UciMessage::BestMove {
+                                        best_move: to_uci_move(&game.position, mov),
+                                        ponder: None,
+                                    }.to_string());
+                                    std::io::stdout().flush().expect("stdout flush error");
+                                } else {
+                                    let time_control = if let Some(tc) = time_control {
+                                        to_uci_time_control(tc, game.position.colour)
+                                    } else {
+                                        TimeControl::Infinite
+                                    };
+
+                                    // search!
+                                    let search_handle = game.search(
+                                        time_control, 
+                                        Some(trans_table.clone()), 
+                                        sndr.clone(),
+                                    );
+
+                                    search_control = Some(SearchControl {
+                                        search_handle,
+                                        search_rcvr,
+                                        syzygy_rcvr,
+                                    });
+                                }
                             }
                         }
                         UciMessage::Stop => {
-                            uci_stop(best_move, None, kill_switch.as_ref());
+                            if let Some(sc) = std::mem::replace(&mut search_control, None) {
+                                uci_stop(best_move, None, sc.search_handle.kill_switch.as_ref());
+                            }
+                            search_control = None;
                         }
                         UciMessage::Quit => {
-                            kill_switch.store(true, Ordering::SeqCst);
+                            if let Some(sc) = std::mem::replace(&mut search_control, None) {
+                                sc.search_handle.kill_switch.store(true, Ordering::SeqCst);
+                            }
                             break 'event;
                         }
                         UciMessage::SetOption { name: _, value: _ } => (),
@@ -160,7 +211,7 @@ fn uci_register() {
 }
 
 fn uci_position(startpos: bool, fen: Option<UciFen>, moves: Vec<UciMove>) -> Option<Game> {
-    let mut board = if startpos {
+    let board = if startpos {
         Some(Board::default())
     } else if let Some(fen) = fen {
         match Board::from_fen(fen.as_str()) {
@@ -212,6 +263,9 @@ fn uci_search_info(position: &Board, info: SearchInfo, is_final: bool) -> Option
             lower_bound: None, 
             upper_bound: None 
         },
+        // send depths
+        UciInfoAttribute::Depth(info.depth as u8),
+        UciInfoAttribute::SelDepth(info.sel_depth as u8),
     ]));
 
     if is_final { // send 'bestmove'
@@ -269,6 +323,28 @@ fn from_uci_move(board: &Board, mov: UciMove) -> Option<Move> {
     match board.is_valid(mov) {
         true => Some(mov),
         false => None,
+    }
+}
+
+fn to_uci_time_control(time_control: UciTimeControl, side: Side) -> TimeControl {
+    match time_control {
+        UciTimeControl::Ponder => panic!("ponder request?"),
+        UciTimeControl::Infinite => TimeControl::Infinite,
+        UciTimeControl::MoveTime(time) => TimeControl::MoveTime(time.to_std().unwrap()),
+        UciTimeControl::TimeLeft { white_time, black_time, white_increment, black_increment, moves_to_go } => {
+            match side {
+                Side::White => TimeControl::TimeLeft {
+                    time_left: white_time.unwrap().to_std().unwrap(),
+                    increment: white_increment.map(|d| d.to_std().unwrap()),
+                    moves_left: moves_to_go.map(|c| c as usize),
+                },
+                Side::Black => TimeControl::TimeLeft {
+                    time_left: black_time.unwrap().to_std().unwrap(),
+                    increment: black_increment.map(|d| d.to_std().unwrap()),
+                    moves_left: moves_to_go.map(|c| c as usize),
+                },
+            }
+        },
     }
 }
 

@@ -165,29 +165,29 @@ impl Board {
         }
     }
 
-    fn is_tile_cvrd_actv(&self, sq: u8, all: u64, actv: u64) -> bool {
-        fend::knight_fend(sq) & self.knights & actv != 0
-        || fend::bishop_fend(sq, all) & (self.bishops | self.queens) & actv != 0
-        || fend::rook_fend(sq, all) & (self.rooks | self.queens) & actv != 0
-        || fend::pawn_fend_idle(sq) & self.pawns & actv != 0
+    fn is_tile_cvrd_actv(&self, sq: u8) -> bool {
+        fend::knight_fend(sq) & self.knights & self.actv != 0
+        || fend::bishop_fend(sq, self.all) & (self.bishops | self.queens) & self.actv != 0
+        || fend::rook_fend(sq, self.all) & (self.rooks | self.queens) & self.actv != 0
+        || fend::pawn_fend_idle(sq) & self.pawns & self.actv != 0
         || fend::king_fend(sq) & (1 << self.actv_king_sq) != 0
     }
-    fn is_tile_cvrd_idle(&self, sq: u8, all: u64, idle: u64) -> bool {
-        fend::knight_fend(sq) & self.knights & idle != 0
-        || fend::bishop_fend(sq, all) & (self.bishops | self.queens) & idle != 0
-        || fend::rook_fend(sq, all) & (self.rooks | self.queens) & idle != 0
-        || fend::pawn_fend_actv(sq) & self.pawns & idle != 0
+    fn is_tile_cvrd_idle(&self, sq: u8) -> bool {
+        fend::knight_fend(sq) & self.knights & self.idle != 0
+        || fend::bishop_fend(sq, self.all) & (self.bishops | self.queens) & self.idle != 0
+        || fend::rook_fend(sq, self.all) & (self.rooks | self.queens) & self.idle != 0
+        || fend::pawn_fend_actv(sq) & self.pawns & self.idle != 0
         || fend::king_fend(sq) & (1 << self.idle_king_sq) != 0
     }
 
     #[inline]
     pub fn is_actv_in_check(&self) -> bool {
-        self.is_tile_cvrd_idle(self.actv_king_sq, self.all, self.idle)
+        self.is_tile_cvrd_idle(self.actv_king_sq)
     }
-    /// If this ever returns true, this is a bug.
+    /// If this ever returns true, a bug has occured.
     #[inline]
     pub fn is_idle_in_check(&self) -> bool {
-        self.is_tile_cvrd_actv(self.idle_king_sq, self.all, self.actv)
+        self.is_tile_cvrd_actv(self.idle_king_sq)
     }
 
     /// Flip the board. Does not update move counters.
@@ -255,7 +255,11 @@ impl Board {
                         }
                     }
                 }
-                Piece::King => panic!("king captured! fen: {} | {:?} | {:?}", self.to_fen(), Move::new(from_sq, to_sq, piece), &self),
+                Piece::King => panic!("king captured! {} | {:?} | {:?}", 
+                    self.to_fen(), 
+                    Move::new(from_sq, to_sq, piece), 
+                    &self
+                ),
             }
         } else {
             // check for en passant before assuming no capture
@@ -285,8 +289,8 @@ impl Board {
                 self.fifty_move_clock = 0;
                 // double-advance: flag rear tile for en passant
                 if to == from << 16 {
-                    // shift accounts for board flip
-                    self.en_passant = from << 0o40;
+                    debug_assert!(from & 0xFF00 != 0);
+                    self.en_passant = from << 0o40; // shift accounts for board flip
                     self.hash ^= zobrist::get_hash_en_passant(self.en_passant);
                 }
             }
@@ -426,14 +430,20 @@ impl Board {
         self.flip();
         self.move_count += self.colour as u16;
         self.fifty_move_clock += 1;
+        
+        if self.en_passant != 0 {
+            self.hash ^= zobrist::get_hash_en_passant(self.en_passant);
+            self.en_passant = 0;
+        }
     }
-    /// Undo a null move and flip the player turn.
+
+    /* /// Undo a null move and flip the player turn.
     pub fn unmake_null(&mut self, en_passant: u64) {
         self.flip();
         self.move_count -= self.colour as u16;
         self.fifty_move_clock -= 1;
         self.en_passant = en_passant;
-    }
+    } */
 
     /// Check for stalemate and checkmate.
     pub fn is_mate(&self) -> Option<GameOver> {
@@ -535,6 +545,8 @@ impl Board {
         as_result!(1 << self.actv_king_sq & overlap == 0)?;
         overlap |= 1 << self.actv_king_sq;
         as_result!(1 << self.idle_king_sq & overlap == 0)?;
+        overlap |= 1 << self.idle_king_sq;
+        as_result!(self.all == overlap)?;
 
         // validate pawn positions and en passant
         as_result!(self.pawns & 0xFF000000000000FF == 0)?;
@@ -549,7 +561,7 @@ impl Board {
         as_result!(!self.idle_castle_rights.contains(CastleRights::KINGSIDE)  || self.idle_king_sq == 0o74)?;
         as_result!(!self.idle_castle_rights.contains(CastleRights::KINGSIDE)  || self.rooks & self.idle & 0x8000000000000000 != 0)?;
         as_result!(!self.idle_castle_rights.contains(CastleRights::QUEENSIDE) || self.idle_king_sq == 0o74)?;
-        as_result!(!self.idle_castle_rights.contains(CastleRights::QUEENSIDE) || self.rooks & self.idle & 0x100000000000000 != 0)?;
+        as_result!(!self.idle_castle_rights.contains(CastleRights::QUEENSIDE) || self.rooks & self.idle & 0x100000000000000 != 0)?; // this one
 
         // validate position legality
         as_result!(!self.is_idle_in_check())?;
@@ -565,9 +577,9 @@ impl Board {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    /* use super::*;
 
-    /* #[test]
+    #[test]
     fn test_make_unmake() {
         let fen1 = "r1bqk1nr/pppp1ppp/2B5/2b1p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQ - 0 4";
         let fen2 = "R7/6k1/8/8/P6P/6K1/8/4r3 b - - 0 1";

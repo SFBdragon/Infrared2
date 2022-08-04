@@ -32,8 +32,6 @@ pub enum SearchEval {
     Mate(i8),
 }
 impl SearchEval {
-    /// ### Panics:
-    /// Panics if score indicates a mate in zero.
     fn from_search(score: i16) -> Self {
         match score {
             s if s <=  eval::MATE+128 => SearchEval::Mate((-s-eval::MATE-1) as i8),
@@ -52,7 +50,17 @@ impl Ord for SearchEval {
             }
             SearchEval::Mate(self_mate) => match other {
                 SearchEval::Normal(_) => if self_mate >= 0 { Greater } else { Less },
-                SearchEval::Mate(other_mate) => self_mate.cmp(other_mate),
+                SearchEval::Mate(other_mate) => {
+                    let is_self_pos = self_mate >= 0;
+                    let is_other_pos = *other_mate >= 0;
+                    if is_self_pos && !is_other_pos {
+                        Greater
+                    } else if !is_self_pos && is_other_pos {
+                        Less
+                    } else {
+                        other_mate.cmp(&self_mate)
+                    }
+                }
             },
         }
     }
@@ -92,20 +100,26 @@ pub fn search(
     // setup
 
     let old_srch_arc = Arc::new(Mutex::new(Vec::new()));
-    let new_srch_arc = Arc::new(Mutex::new(Vec::new()));
+    let mut move_count = 0;
+    {
+        let mut moves_guard = old_srch_arc.lock().unwrap();
+        board.for_mov(|mov| {
+            moves_guard.push((mov, SearchEval::Normal(0)));
+            move_count += 1;
+            false
+        });
+        assert_ne!(move_count, 0);
+    }
+    
+    let new_srch_arc = Arc::new(Mutex::new(Vec::with_capacity(move_count)));
     let draft_arc = Arc::new(AtomicI8::new(2));
-
-    let mut moves_guard = old_srch_arc.lock().unwrap();
-    board.for_mov(|mov| { moves_guard.push((mov, SearchEval::Normal(0))); false });
-    assert_ne!(moves_guard.len(), 0);
-    drop(moves_guard);
 
     
     // set up time management systems
 
     let mut time_tgt = Option::<Arc<Mutex<Duration>>>::None;
     let mut time_man = Option::<TimeManager>::None;
-
+    
     match allocated_time {
         AllocatedTime::Forever => (),
         AllocatedTime::Fixed(time) => time_tgt = Some(Arc::new(Mutex::new(time))),
@@ -115,10 +129,12 @@ pub fn search(
         },
     }
     
+    let pv_send_lock = Arc::new(AtomicBool::new(false));
     if let Some(tgt_time_arc) = time_tgt.clone() {
         watchdog(
             info_sndr.clone(), 
             kill_switch.clone(), 
+            pv_send_lock.clone(),
             tgt_time_arc.clone(), 
             old_srch_arc.clone(), 
             new_srch_arc.clone(), 
@@ -132,69 +148,82 @@ pub fn search(
     loop {
         let draft = draft_arc.load(SeqCst);
 
-        if kill_switch.load(SeqCst) { return; }
         thread_pool.install(|| {
-
-            new_srch_arc.lock().unwrap().clear();
-
             old_srch_arc.lock().unwrap().clone().par_iter().for_each(|&(mov, _)| {
-                if !kill_switch.load(SeqCst) {
-                    let trans_table = trans_table.clone();
-                    let pos_hash_map = pos_hash_map.clone();
-                    let kill_switch = kill_switch.clone();
+                if kill_switch.load(SeqCst) { return; }
 
-                    let mut search_data = SearchData {
-                        kill_switch: &kill_switch,
-                        trans_table: &trans_table,
-                        pos_hash_map: &pos_hash_map,
+                let trans_table = trans_table.clone();
+                let pos_hash_map = pos_hash_map.clone();
+                let kill_switch = kill_switch.clone();
 
-                        node_count: 0,
-                        check_exts: 0,
-                        killers: vec![(None, None); 24],
-                    };
-        
-                    let mut board = board.clone();
-                    board.make(mov);
-                    
-                    let score = -pvs(&mut board, -i16::MAX, i16::MAX, draft, 0, &mut search_data, None);
+                let mut search_data = SearchData {
+                    kill_switch: &kill_switch,
+                    trans_table: &trans_table,
+                    pos_hash_map: &pos_hash_map,
 
-                    let eval = SearchEval::from_search(score);
-                    let mut searches = new_srch_arc.lock().unwrap();
-                    let index = searches.binary_search_by_key(&eval, |&(_, s)| s).unwrap_or_else(|e| e);
-                    searches.insert(index, (mov, eval));
-                }
+                    node_count: 0,
+                    check_exts: 0,
+                    killers: vec![(None, None); 24],
+                };
+    
+                let mut board = board.clone();
+                board.make(mov);
+                
+                let score = -pvs(&mut board, -i16::MAX, i16::MAX, draft, 0, &mut search_data, None);
+                if kill_switch.load(SeqCst) { return; }
+
+                let eval = SearchEval::from_search(score);
+                let mut searches = new_srch_arc.lock().unwrap();
+                let index = searches.binary_search_by(|(_, s)| eval.cmp(&s)).unwrap_or_else(|e| e);
+                searches.insert(index, (mov, eval));
             });
         });
 
-        if kill_switch.load(SeqCst) { return; }
-
-        // sort
-        new_srch_arc.lock().unwrap().sort_unstable_by(|(_, v1), (_, v2)| v1.cmp(v2).reverse());
-
+        // use old searches if pv is not re-searched (occurs upon early search kill)
+        let old_pv = old_srch_arc.lock().unwrap().first().unwrap().0;
+        let is_pv_searched = new_srch_arc.lock().unwrap().iter().any(|&(m, _)| m == old_pv);
+        let evals = match kill_switch.load(SeqCst) && !is_pv_searched {
+            true =>  old_srch_arc.lock().unwrap().clone(),
+            false => new_srch_arc.lock().unwrap().clone(),
+        };
+        
         // send search info
-        let evals = new_srch_arc.lock().unwrap().clone();
         let depth = draft as usize + 1;
         let info = SearchInfo { evals, depth, sel_depth: depth + 4 };
         let mut is_final = false;
 
         if let Some(man) = time_man.as_mut() {
             match man.update(&info) {
-                Some(dur) => if let Some(tgt) = &time_tgt { *tgt.lock().unwrap() = dur },
+                Some(dur) => *time_tgt.as_ref().unwrap().lock().unwrap() = dur,
                 None => is_final = true,
             }
         }
+        
+        if is_final {
+            // if pv_send_lock has been toggled, do not send another pv!
+            if let Ok(_) = pv_send_lock.compare_exchange(false, true, SeqCst, SeqCst) {
+                info_sndr.send((info, true)).unwrap();
+            }
+            return;
+        }
 
-        info_sndr.send((info, is_final)).unwrap();
-
-        if is_final { return; }
-
+        if let Err(_) = info_sndr.send((info, false)) { return; }
+        
         draft_arc.fetch_add(1, SeqCst);
+        *old_srch_arc.lock().unwrap() = std::mem::replace(
+            new_srch_arc.lock().unwrap().as_mut(), 
+            Vec::with_capacity(move_count),
+        );
+
+        if kill_switch.load(SeqCst) { break; }
+        if pv_send_lock.load(SeqCst) { break; }
     }
 }
 
 fn watchdog(
     info_sndr: Sender<(SearchInfo, bool)>,
     kill_switch: Arc<AtomicBool>,
+    pv_send_lock: Arc<AtomicBool>,
     tgt_time_arc: Arc<Mutex<Duration>>,
     old_srch_arc: Arc<Mutex<Vec<(Move, SearchEval)>>>, 
     new_srch_arc: Arc<Mutex<Vec<(Move, SearchEval)>>>,
@@ -206,7 +235,7 @@ fn watchdog(
             let search_time = Instant::now() - search_begin;
             let tgt_time = *tgt_time_arc.lock().unwrap();
 
-            if search_time > tgt_time {
+            if search_time < tgt_time {
                 std::thread::sleep(
                     tgt_time - search_time - Duration::from_millis(1)
                 );
@@ -214,8 +243,13 @@ fn watchdog(
                 break;
             }
         }
-        
-        kill_switch.load(SeqCst);
+
+        // if pv_send_lock has been toggled, do not send another pv!
+        if let Err(_) = pv_send_lock.compare_exchange(false, true, SeqCst, SeqCst) {
+            return;
+        }
+
+        kill_switch.store(true, SeqCst);
         
         // determine if most recent depth's search has searched the pv
         let old_searches = old_srch_arc.lock().unwrap();
@@ -229,8 +263,8 @@ fn watchdog(
             false => old_searches.clone(),
         };
 
-        // send
-        info_sndr.send((SearchInfo { evals, depth, sel_depth: depth + 4 }, true)).unwrap()
+        // Send info. The channel may be disconnected, but it doesn't matter.
+        let _ = info_sndr.send((SearchInfo { evals, depth, sel_depth: depth + 4 }, true));
     });
 }
 
@@ -301,13 +335,15 @@ fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mu
     let mut move_count = 0;
     let mut legal_move_exists = false;
     let thing = |mov: Move, board: &Board, data: &mut SearchData| -> bool {
+        //if !board.is_valid(mov) { panic!("{:?}\n{}\n\n", mov, board.to_fen()); }
+
         legal_move_exists = true;
         move_count += 1;
         if draft > 3 && move_count == 6 /* && !check_ext */ && !is_actv_in_check { depth_reduct += 1; }
 
         let mut b = board.clone();
         b.make(mov);
-        /* board.validate().unwrap(); */
+        //if let Err(e) = b.validate() { panic!("{}\n{:?}\n{}\n{}\n\n", e, mov, board.to_fen(), b.to_fen()); }
         
         let mut score = -i16::MAX;
         if is_pos_draw(&b, data.pos_hash_map, prev_phn) {
@@ -456,16 +492,52 @@ pub fn is_pos_draw(board: &Board, phm: &PosHashMap, prev_phn: Option<&PosHashNod
 #[cfg(test)]
 mod tests {
     use super::*;
-     
-    /* #[test]
-    fn test_negamax() {
-        let fen = "r1bqkbnr/pppp2pp/2n5/1B2pp2/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4";
-        let mut board = crate::board::Board::from_fen(fen).unwrap();
-        let mut ttab = ttab::TransTable::with_memory(1024 * 1024 * 1024 * 2);
-        let mut ks = std::sync::atomic::AtomicBool::new(false);
-        
-        let score = -negamax(&board, -i32::MAX, i32::MAX, /* 0, */ 6, &mut ttab, &ks);
-        dbg!(score);
-    } */
-}
 
+    #[test]
+    fn test_search_eval_cmp() {
+        use std::cmp::Ordering;
+
+        let s1 = SearchEval::Normal(34);
+        let s2 = SearchEval::Normal(-40);
+        let s3 = SearchEval::Mate(4);
+        let s4 = SearchEval::Mate(8);
+        let s5 = SearchEval::Mate(-2);
+
+        assert_eq!(s1.cmp(&s1), Ordering::Equal);
+        assert_eq!(s1.cmp(&s2), Ordering::Greater);
+        assert_eq!(s1.cmp(&s3), Ordering::Less);
+        assert_eq!(s1.cmp(&s5), Ordering::Greater);
+
+        assert_eq!(s2.cmp(&s1), Ordering::Less);
+        assert_eq!(s2.cmp(&s2), Ordering::Equal);
+        assert_eq!(s2.cmp(&s3), Ordering::Less);
+        assert_eq!(s2.cmp(&s5), Ordering::Greater);
+        
+        assert_eq!(s3.cmp(&s2), Ordering::Greater);
+        assert_eq!(s3.cmp(&s3), Ordering::Equal);
+        assert_eq!(s3.cmp(&s4), Ordering::Greater);
+        assert_eq!(s3.cmp(&s5), Ordering::Greater);
+
+        assert_eq!(s5.cmp(&s2), Ordering::Less);
+        assert_eq!(s5.cmp(&s3), Ordering::Less);
+        assert_eq!(s5.cmp(&s4), Ordering::Less);
+        assert_eq!(s5.cmp(&s5), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_eval_bin_search() {
+        use std::cmp::Ordering;
+
+        let evals = [
+            SearchEval::Mate(4),
+            SearchEval::Mate(8),
+            SearchEval::Normal(34),
+            SearchEval::Normal(-40),
+            SearchEval::Mate(-2),
+        ];
+
+        for array in evals.windows(2) {
+            assert_ne!(array[0].cmp(&array[1]), Ordering::Less);
+        }
+    }
+}
