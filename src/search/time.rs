@@ -2,7 +2,7 @@
 
 use std::{cmp, time::{Instant, Duration}};
 
-use crate::Move;
+use crate::{Move, Sq};
 
 use super::{SearchInfo, SearchEval};
 
@@ -108,7 +108,7 @@ const PANIC_MAX_THRESH: i16 = 350;
 const DECISIVE_PV_DIFF: i16 = 200;
 
 pub struct TimeManager {
-    recapture_sq: Option<u8>,
+    recapture: Option<Sq>,
     allocated_time: Duration,
     maximum_time: Duration,
 
@@ -129,7 +129,7 @@ pub struct TimeManager {
 impl TimeManager {
     pub fn start(allocated_time: Duration, maximum_time: Duration, prev_move: Option<Move>) -> Self {
         Self { 
-            recapture_sq: prev_move.map(|m| m.to_sq),
+            recapture: prev_move.map(|m| m.to),
             allocated_time,
             maximum_time,
 
@@ -237,7 +237,7 @@ impl TimeManager {
         // check if elapsed is a significant fraction of allocated
         else if search_time > self.allocated_time.mul_f64(MIN_SEARCH) {
             // handle the case of an obvious recapture
-            if self.recapture_sq.map_or(false, |sq| sq == pv.to_sq) {
+            if self.recapture.map_or(false, |sq| sq == pv.to) {
                 if pv_diff > DECISIVE_PV_DIFF { return None; }
             }
         }
@@ -269,6 +269,6 @@ mod tests {
                 time_left -= time;
             }
         }
-        panic!();
+        //panic!();
     }
 }

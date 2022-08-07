@@ -2,7 +2,7 @@ use std::io::Read;
 
 use once_cell::sync::Lazy;
 
-use crate::{Move, Piece};
+use crate::{Move, Piece, Sq};
 
 
 pub static BOOK: Lazy<Vec<OpeningEntry>> = Lazy::new(|| {
@@ -41,7 +41,7 @@ pub static BOOK: Lazy<Vec<OpeningEntry>> = Lazy::new(|| {
         vec.push(OpeningEntry {
             hash: u64::from_le_bytes(hash_buf),
             freq: u32::from_le_bytes(freq_buf),
-            mov: Move::new(buf[12], buf[13], piece.unwrap()),
+            mov: Move::new(Sq::new(buf[12]), Sq::new(buf[13]), piece.unwrap()),
         });
     }
 
@@ -81,17 +81,19 @@ pub fn query_book_best(hash: u64) -> Option<Move> {
 
 #[cfg(test)]
 mod tests {
+    use crate::{Sq, Move, Piece, Board};
+
     #[test]
     pub fn test_query_startpos() {
         assert_eq!(
-            crate::Move::new(0o14, 0o34, crate::Piece::Pawn), // good ol' kings pawn opening
-            super::query_book_best(crate::Board::default().hash).unwrap()
+            Move::new(Sq::E2, Sq::E4, Piece::Pawn), // good ol' king's pawn opening
+            super::query_book_best(Board::default().hash).unwrap()
         );
 
         /* let mut b = crate::Board::default();
         b.make(crate::Move::new(0o14, 0o34, crate::Piece::Pawn));
         b.make(crate::Move::new(0o14, 0o34, crate::Piece::Pawn)); */
-        panic!("{:#?}", super::query_book_best(0xb1926f79b1bd3788/* b.hash */));
+        //panic!("{:#?}", super::query_book_best(0xb1926f79b1bd3788/* b.hash */));
     }
 }
 

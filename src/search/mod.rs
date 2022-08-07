@@ -4,7 +4,7 @@ pub mod time;
 pub mod ttab;
 
 
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering::SeqCst, AtomicI8}, Mutex}, time::{Duration, Instant}};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering::SeqCst, AtomicI8, /* AtomicI16 */}, Mutex}, time::{Duration, Instant}};
 use crossbeam_channel::Sender;
 use rayon::prelude::*;
 
@@ -147,6 +147,7 @@ pub fn search(
     let thread_pool = rayon::ThreadPoolBuilder::new().build().unwrap();
     loop {
         let draft = draft_arc.load(SeqCst);
+        //let alpha = Arc::new(AtomicI16::new(-i16::MAX + 200));
 
         thread_pool.install(|| {
             old_srch_arc.lock().unwrap().clone().par_iter().for_each(|&(mov, _)| {
@@ -169,13 +170,17 @@ pub fn search(
                 let mut board = board.clone();
                 board.make(mov);
                 
+                //let a = alpha.load(SeqCst);
                 let score = -pvs(&mut board, -i16::MAX, i16::MAX, draft, 0, &mut search_data, None);
+                //let score = -pvs(&mut board, -i16::MAX, -a + 150, draft, 0, &mut search_data, None);
                 if kill_switch.load(SeqCst) { return; }
 
                 let eval = SearchEval::from_search(score);
                 let mut searches = new_srch_arc.lock().unwrap();
                 let index = searches.binary_search_by(|(_, s)| eval.cmp(&s)).unwrap_or_else(|e| e);
                 searches.insert(index, (mov, eval));
+
+                //alpha.store(score, SeqCst);
             });
         });
 
@@ -354,12 +359,12 @@ fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mu
             if max != -i16::MAX {
                 score = -pvs(&mut b, -i16::MAX/* -alpha-1 */, -alpha, draft - depth_reduct, depth + 1, data, Some(&phn));
             }
-            if max == -i16::MAX || score >= alpha && score < beta {
+            if score >= alpha && score < beta || max == -i16::MAX {
                 score = -pvs(&mut b, -beta, -alpha, draft - 1, depth + 1, data, Some(&phn));
             }
         }
         
-        if score > max {
+        if score >= max {
             max = score;
             best_move = Some(mov);
             if max > alpha { alpha = max; }
@@ -423,7 +428,6 @@ fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mu
             } else {
                 true // always-replace policy for mates
             }
-            //true
         });
     }
     

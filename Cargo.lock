@@ -331,7 +331,6 @@ dependencies = [
 name = "infra"
 version = "0.1.0"
 dependencies = [
- "bitflags",
  "criterion",
  "crossbeam-channel",
  "once_cell",

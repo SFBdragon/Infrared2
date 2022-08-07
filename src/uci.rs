@@ -1,6 +1,6 @@
 use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, io::Write};
 
-use infra::{Move, Board, Piece, SearchInfo, SearchEval, TransTable, Game, SearchHandle, Side, opening, TimeControl};
+use infra::{Move, Board, Piece, SearchInfo, SearchEval, TransTable, Game, SearchHandle, Side, opening, TimeControl, Sq};
 use crossbeam_channel::{Sender, Receiver};
 use vampirc_uci::{
     UciMessage, 
@@ -14,7 +14,6 @@ use vampirc_uci::{
 
 struct SearchControl {
     search_handle: SearchHandle,
-    search_rcvr: Receiver<(SearchInfo, bool)>,
     syzygy_rcvr: Receiver<SearchInfo>,
 }
 
@@ -53,14 +52,14 @@ pub fn uci() {
         let mut search_info_index = None;
         let mut syzygy_info_index = None;
         if let Some(sc) = search_control.as_ref() {
-            search_info_index = Some(selector.recv(&sc.search_rcvr));
+            search_info_index = Some(selector.recv(&sc.search_handle.info_channel.1));
             syzygy_info_index = Some(selector.recv(&sc.syzygy_rcvr));
         }
         let operation_index = selector.ready();
 
         if search_info_index.is_some() && operation_index == search_info_index.unwrap() {
             let search_control_ref = search_control.as_ref().unwrap();
-            if let Ok((info, is_final)) = search_control_ref.search_rcvr.try_recv() {
+            if let Ok((info, is_final)) = search_control_ref.search_handle.info_channel.1.try_recv() {
                 best_move = uci_search_info(&position.as_ref().unwrap().position, info, is_final);
                 if is_final {
                     search_control_ref.search_handle.kill_switch.store(true, Ordering::SeqCst);                
@@ -108,8 +107,6 @@ pub fn uci() {
                             search_control = None;
 
                             if let Some(game) = &position {
-                                let (sndr, search_rcvr) = crossbeam_channel::unbounded();
-                                
                                 // syzygy query thread (auto checks piece count)
                                 let syzygy_board = game.position.clone();
                                 let (syzygy_sndr, syzygy_rcvr) = crossbeam_channel::bounded(1);
@@ -130,7 +127,7 @@ pub fn uci() {
                                     std::io::stdout().flush().expect("stdout flush error");
                                 } else {
                                     let time_control = if let Some(tc) = time_control {
-                                        to_uci_time_control(tc, game.position.colour)
+                                        to_uci_time_control(tc, game.position.side)
                                     } else {
                                         TimeControl::Infinite
                                     };
@@ -138,13 +135,11 @@ pub fn uci() {
                                     // search!
                                     let search_handle = game.search(
                                         time_control, 
-                                        Some(trans_table.clone()), 
-                                        sndr.clone(),
+                                        Some(trans_table.clone()),
                                     );
 
                                     search_control = Some(SearchControl {
                                         search_handle,
-                                        search_rcvr,
                                         syzygy_rcvr,
                                     });
                                 }
@@ -286,17 +281,16 @@ fn uci_search_info(position: &Board, info: SearchInfo, is_final: bool) -> Option
 // Helpers
 
 fn to_uci_move(board: &Board, mov: Move) -> UciMove {
-    let is_white_to_play = board.colour == Side::White;
     UciMove {
         from: UciSquare {
-            file: char::from_u32((b'a' + mov.from_sq % 8) as u32).unwrap(),
-            rank: if is_white_to_play { (mov.from_sq / 8) + 1 } else { 8 - (mov.from_sq / 8) },
+            file: char::from_u32((b'a' + mov.from.rank()) as u32).unwrap(),
+            rank: if board.side.is_white() { mov.from.file() + 1 } else { 8 - mov.from.file() },
         },
         to: UciSquare {
-            file: char::from_u32((b'a' + mov.to_sq % 8) as u32).unwrap(),
-            rank: if is_white_to_play { (mov.to_sq / 8) + 1 } else { 8 - (mov.to_sq / 8) },
+            file: char::from_u32((b'a' + mov.to.rank()) as u32).unwrap(),
+            rank: if board.side.is_white() { mov.to.file() + 1 } else { 8 - mov.to.file() },
         },
-        promotion: if mov.piece != Piece::Pawn && (1 << mov.from_sq) & board.pawns != 0 {
+        promotion: if mov.piece != Piece::Pawn && (mov.from.bm()) & board.pawns != 0 {
             Some(to_uci_piece(mov.piece))
         } else {
             None
@@ -305,20 +299,15 @@ fn to_uci_move(board: &Board, mov: Move) -> UciMove {
 }
 
 fn from_uci_move(board: &Board, mov: UciMove) -> Option<Move> {
-    let is_white_to_play = board.colour == Side::White;
-    let mut from_sq = (mov.from.file as u8 - b'a') + (mov.from.rank - 1) * 8;
-    let mut to_sq   = (mov.to.file as u8 - b'a')   + (mov.to.rank   - 1) * 8;
-    if !is_white_to_play {
-        from_sq = infra::board::flip_sq(from_sq);
-        to_sq = infra::board::flip_sq(to_sq);
-    }
+    let from = Sq::file_rank(mov.from.file as u8 - b'a', mov.from.rank - 1).cflip(board.side);
+    let to   = Sq::file_rank(mov.to.file as u8 - b'a', mov.to.rank - 1).cflip(board.side);
 
     let piece = match mov.promotion {
         Some(piece) => from_uci_piece(piece),
-        None => board.get_piece_at(1 << from_sq)?,
+        None => board.get_piece_at(from)?,
     };
     
-    let mov = Move::new(from_sq, to_sq, piece);
+    let mov = Move::new(from, to, piece);
 
     match board.is_valid(mov) {
         true => Some(mov),

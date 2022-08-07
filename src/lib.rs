@@ -1,14 +1,18 @@
+pub mod dat;
+pub mod parse;
 pub mod board;
+pub mod epd;
 pub mod search;
 pub mod opening;
 pub mod syzygy;
 
 use std::{sync::{Arc, atomic::AtomicBool}, thread::JoinHandle};
 
-pub use board::{Move, Board, Side, Piece, GameOver};
+pub use dat::*;
+pub use board::Board;
 pub use search::{SearchInfo, SearchEval, ttab::TransTable, time::TimeControl};
 
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Sender, Receiver};
 use board::zobrist::{PosHashMap, U64IdentHashBuilder};
 
 
@@ -27,19 +31,6 @@ macro_rules! as_result {
                 "`"
             )
         )
-    };
-}
-
-/// Loop through the index of each set bit from least to most significant.
-#[macro_export]
-macro_rules! for_sq {
-    ($sq:ident in $bb:expr => $blk:expr) => {
-        let mut t = $bb;
-        while t != 0 {
-            let $sq = t.trailing_zeros() as u8;
-            t &= t - 1;
-            $blk
-        }
     };
 }
 
@@ -144,39 +135,42 @@ impl Game {
     pub fn is_game_over(&self) -> Option<GameOver> {
         self.position.is_game_over().or_else(|| 
             board::zobrist::threefold_repetition(&self.prev_hashes, self.position.hash)
-                .then_some(GameOver::ThreefoldRep)
+                .then_some(GameOver::ThreefoldRepetition)
         )
     }
 
 
     pub fn search(&self,
         time_control: TimeControl, 
-        trans_table: Option<Arc<TransTable>>, 
-        info_sndr: Sender<(SearchInfo, bool)>
+        trans_table: Option<Arc<TransTable>>,
     ) -> SearchHandle {
         let kill_switch = Arc::new(AtomicBool::new(false));
+        let (sndr, rcvr) = crossbeam_channel::unbounded();
 
         let thread_game = self.clone();
         let thread_kill_switch = kill_switch.clone();
+        let thread_sndr = sndr.clone();
 
         let thread_handle = std::thread::spawn(move || {
             search::search(
                 thread_game.position,
                 thread_game.prev_hashes,
                 thread_game.move_list.last().map(|&m| m),
-                info_sndr,
+                thread_sndr,
                 thread_kill_switch,
                 time_control.allocate_time(thread_game.book_distance),
                 trans_table.unwrap_or_default(),
             )
         });
 
-        SearchHandle { kill_switch, thread_handle }
+        SearchHandle { info_channel: (sndr, rcvr), kill_switch, thread_handle }
     }
 }
 
 #[derive(Debug)]
 pub struct SearchHandle {
+    /// Channel through which search data is sent.
+    pub info_channel: (Sender<(SearchInfo, bool)>, Receiver<(SearchInfo, bool)>),
     /// Set the switch to kill the engine at any time (do not clear).
     pub kill_switch: Arc<AtomicBool>,
     /// Handle to the engine thread.

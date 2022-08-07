@@ -208,7 +208,7 @@ fn role_to_piece(role: Role) -> Piece {
 fn parse_san(board: &Board, san_plus: pgn_reader::SanPlus) -> Option<Move> {
     let is_white_actv = board.colour == Side::White;
     match san_plus.san {
-        pgn_reader::San::Normal { role, file, rank, capture, to, promotion } => {
+        pgn_reader::San::Normal { role, file, rank, capture: _, to, promotion } => {
             let mut decode: Option<Move> = None;
             board.for_role_mov(role_to_piece(role), |mov| {
                 let to_sq = if is_white_actv { mov.to_sq } else { flip_sq(mov.to_sq) };
@@ -216,10 +216,6 @@ fn parse_san(board: &Board, san_plus: pgn_reader::SanPlus) -> Option<Move> {
                     if to_sq / 8 == to.rank().char() as u8 - b'1' {
                         if let Some(prom) = promotion {
                             if mov.piece != role_to_piece(prom) { return false; }
-                        }
-                        if capture {
-                            if board.get_piece_at(1 << mov.to_sq).is_none() 
-                            && board.en_passant & (1 << mov.to_sq) == 0 { return false; }
                         }
                         let from_sq = if is_white_actv { mov.from_sq } else { flip_sq(mov.from_sq) };
                         if let Some(from_file) = file {

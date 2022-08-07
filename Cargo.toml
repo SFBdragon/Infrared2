@@ -7,11 +7,11 @@ edition = "2021"
 opt-level=3
 
 [dependencies]
-bitflags = "1.3"
 vampirc-uci = "0.11"
 once_cell = "1.12"
 rayon = "1.5"
 crossbeam-channel = "0.5"
+
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_json = "1.0"

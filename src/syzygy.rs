@@ -3,7 +3,7 @@ use std::time::Duration;
 use crossbeam_channel::Sender;
 use serde::Deserialize;
 
-use crate::{Board, Move, Side, SearchInfo};
+use crate::{Board, Move, SearchInfo, Sq};
 
 #[allow(unused)]
 #[derive(Debug, Clone, Deserialize)]
@@ -47,7 +47,7 @@ struct RawSyzygyMove {
 
 fn query_table_data(board: &Board, timeout: Duration) -> Option<RawSyzygyData> {
     if board.all.count_ones() > 7 { return None; }
-    let fen = board.to_fen();
+    let fen = board.to_fen(true);
 
     let url = format!("http://tablebase.lichess.ovh/standard?fen={}", fen);
     let response = ureq::get(url.as_str()).timeout(timeout).call().ok()?;
@@ -91,39 +91,22 @@ pub fn uci_syzygy_query(board: &Board, info_sndr: Sender<SearchInfo>) {
 
 fn from_uci_move_str(board: &Board, mov: String) -> Option<Move> {
     use crate::Piece;
-
-    if !mov.is_ascii() { return None; };
-    let mov = mov.trim().as_bytes();
+    
+    let mov = mov.as_str().trim();
+    if !mov.is_ascii() { return None; }
     if mov.len() != 4 && mov.len() != 5 { return None; }
 
-    let mut from_sq = (mov[0] - b'a') + (mov[1] - b'1') * 8;
-    let mut to_sq   = (mov[2] - b'a') + (mov[3] - b'1') * 8;
-    if board.colour == Side::Black {
-        from_sq = crate::board::flip_sq(from_sq);
-        to_sq = crate::board::flip_sq(to_sq);
-    }
+    let from = Sq::from_alg(&mov[0..2])?.cflip(board.side);
+    let to   = Sq::from_alg(&mov[2..4])?.cflip(board.side);
 
-    let piece = match mov.get(4).map(|&b| b.to_ascii_lowercase()) {
-        Some(b'q') => Piece::Queen,
-        Some(b'r') => Piece::Rook,
-        Some(b'b') => Piece::Bishop,
-        Some(b'n') => Piece::Knight,
-        None => board.get_piece_at(1 << from_sq)?,
-        Some(_) => return None,
-    };
+    let piece = mov.chars().skip(4).next().map_or(
+        board.get_piece_at(from), 
+        |ch| Piece::from_char_prom(ch.to_ascii_uppercase())
+    )?;
     
-    let mov = Move::new(from_sq, to_sq, piece);
+    let mov = Move::new(from, to, piece);
 
     board.is_valid(mov).then_some(mov)
 }
 
-#[cfg(test)]
-mod tests {
-    /* #[test]
-    pub fn test_query_syzygy() {
-        let b = crate::Board::from_fen("8/5kb1/8/8/6K1/3B4/4PP2/8 w - - 0 1").unwrap();
-        eprintln!("{:#?}", super::query_table_data(&b, std::time::Duration::from_secs(3)));
-        panic!();
-    } */
-}
 

@@ -1,4 +1,4 @@
-use crate::{Board, Piece, for_sq, board::fend};
+use crate::{Board, Sq, for_sq, board::fend, KING, QUEEN, ROOK, BISHOP, KNIGHT, PAWN};
 
 
 pub const DRAW: i16 = 0;
@@ -58,11 +58,11 @@ pub fn eval(pos: &Board) -> i16 {
         ) / 64.0;
 
     // tally up material
-    eval += (actv_pawn_count   - idle_pawn_count  ) * lerp(PIECE_MATERIAL[PAWN_IDX  ], mg_eg);
-    eval += (actv_knight_count - idle_knight_count) * lerp(PIECE_MATERIAL[KNIGHT_IDX], mg_eg);
-    eval += (actv_bishop_count - idle_bishop_count) * lerp(PIECE_MATERIAL[BISHOP_IDX], mg_eg);
-    eval += (actv_rook_count   - idle_rook_count  ) * lerp(PIECE_MATERIAL[ROOK_IDX  ], mg_eg);
-    eval += (actv_queen_count  - idle_queen_count ) * lerp(PIECE_MATERIAL[QUEEN_IDX ], mg_eg);
+    eval += (actv_pawn_count   - idle_pawn_count  ) * lerp(PIECE_MATERIAL[PAWN   as usize], mg_eg);
+    eval += (actv_knight_count - idle_knight_count) * lerp(PIECE_MATERIAL[KNIGHT as usize], mg_eg);
+    eval += (actv_bishop_count - idle_bishop_count) * lerp(PIECE_MATERIAL[BISHOP as usize], mg_eg);
+    eval += (actv_rook_count   - idle_rook_count  ) * lerp(PIECE_MATERIAL[ROOK   as usize], mg_eg);
+    eval += (actv_queen_count  - idle_queen_count ) * lerp(PIECE_MATERIAL[QUEEN  as usize], mg_eg);
     
     // approximate some sense of openness vs closedness of the position (~1 is closed, ~0 is open)
     // max 32 (realistically, 15 is very closed, 7 is very open)
@@ -87,35 +87,33 @@ pub fn eval(pos: &Board) -> i16 {
 
     // favour rooks on open-er files
     for_sq!(sq in pos.rooks & pos.actv => {
-        eval += popcntf(FILE << (sq%8) & pos.pawns) * lerp(ROOK_PAWN_FILE, mg_eg);
+        eval += popcntf(FILE << (sq.file()) & pos.pawns) * lerp(ROOK_PAWN_FILE, mg_eg);
     });
     for_sq!(sq in pos.rooks & pos.idle => {
-        eval -= popcntf(FILE << (sq%8) & pos.pawns) * lerp(ROOK_PAWN_FILE, mg_eg);
+        eval -= popcntf(FILE << (sq.file()) & pos.pawns) * lerp(ROOK_PAWN_FILE, mg_eg);
     });
 
 
     // major+minor piece-square tables
     // safe mobility
     let ma_mi_piece_data = [
-        (pos.knights, KNIGHT_IDX, fend::knight_fend_wall    as fn(u8, u64) -> u64), 
-        (pos.bishops, BISHOP_IDX, fend::bishop_fend         as fn(u8, u64) -> u64), 
-        (pos.rooks,   ROOK_IDX,   fend::rook_fend           as fn(u8, u64) -> u64), 
-        (pos.queens,  QUEEN_IDX,  fend::queen_fend          as fn(u8, u64) -> u64), 
+        (pos.knights, KNIGHT, fend::knight_fend_wall as fn(Sq, u64) -> u64), 
+        (pos.bishops, BISHOP, fend::bishop_fend      as fn(Sq, u64) -> u64), 
+        (pos.rooks,   ROOK,   fend::rook_fend        as fn(Sq, u64) -> u64), 
+        (pos.queens,  QUEEN,  fend::queen_fend       as fn(Sq, u64) -> u64), 
     ];
     let mut actv_cvrd = fend::pawns_fend_actv(pos.pawns & pos.actv);
     let mut idle_cvrd = fend::pawns_fend_idle(pos.pawns & pos.idle);
     for (bb, idx, fend_fn) in ma_mi_piece_data {
         let mut temp_cvrd = 0;
         for_sq!(sq in bb & pos.actv => {
-            let (rank, ffile) = (sq as usize/8, fold_file(sq as usize%8));
-            eval += lerp(PIECE_SQ[idx][rank][ffile], mg_eg);
+            eval += lerp(PIECE_SQ[idx as usize][sq.rank() as usize][fold_file(sq.file() as usize)], mg_eg);
             let fend = fend_fn(sq, pos.all);
             temp_cvrd |= fend;
             eval += popcntf(fend & !idle_cvrd & !pos.actv) * MOBILITY;
         });
         for_sq!(sq in bb & pos.idle => {
-            let (irank, ffile) = (7-sq as usize/8, fold_file(sq as usize%8));
-            eval -= lerp(PIECE_SQ[idx][irank][ffile], mg_eg);
+            eval -= lerp(PIECE_SQ[idx as usize][7-sq.rank() as usize][fold_file(sq.file() as usize)], mg_eg);
             let fend = fend_fn(sq, pos.all);
             idle_cvrd |= fend;
             eval -= popcntf(fend & !actv_cvrd & !pos.idle) * MOBILITY;
@@ -130,15 +128,13 @@ pub fn eval(pos: &Board) -> i16 {
     eval += (popcntf(actv_cvrd & pos.all) - popcntf(idle_cvrd & pos.all)) * FEND;
 
     // king safety + piece sq
-    let actv_king_sq = pos.actv_king_sq as usize;
-    eval += lerp(PIECE_SQ[KING_IDX][  actv_king_sq/8][fold_file(actv_king_sq%8)], mg_eg);
-    let actv_king_ring = fend::king_fend(pos.actv_king_sq)/*  &! (IDLE_PASSED_MASKS[actv_king_sq%8] >> 7-actv_king_sq/8) */;
+    eval += lerp(PIECE_SQ[KING as usize][pos.actv_king.rank() as usize][fold_file(pos.actv_king.file() as usize)], mg_eg);
+    let actv_king_ring = fend::king_fend(pos.actv_king)/*  &! (IDLE_PASSED_MASKS[actv_king%8] >> 7-actv_king/8) */;
     eval += popcntf(actv_king_ring & pos.pawns & pos.actv) * lerp(KING_RING_PAWN, mg_eg);
     eval += popcntf(idle_cvrd & actv_king_ring) * lerp(KING_RING_ATT, mg_eg);
 
-    let idle_king_sq = pos.idle_king_sq as usize;
-    eval -= lerp(PIECE_SQ[KING_IDX][7-idle_king_sq/8][fold_file(idle_king_sq%8)], mg_eg);
-    let idle_king_ring = fend::king_fend(pos.idle_king_sq)/*  &! (ACTV_PASSED_MASKS[idle_king_sq%8] << idle_king_sq/8) */;
+    eval -= lerp(PIECE_SQ[KING as usize][7-pos.idle_king.rank() as usize][fold_file(pos.idle_king.file() as usize)], mg_eg);
+    let idle_king_ring = fend::king_fend(pos.idle_king)/*  &! (ACTV_PASSED_MASKS[idle_king%8] << idle_king/8) */;
     eval -= popcntf(idle_king_ring & pos.pawns & pos.idle) * lerp(KING_RING_PAWN, mg_eg);
     eval -= popcntf(actv_cvrd & idle_king_ring) * lerp(KING_RING_ATT, mg_eg);
 
@@ -146,20 +142,20 @@ pub fn eval(pos: &Board) -> i16 {
     let actv_pawns = pos.pawns & pos.actv;
     let idle_pawns = pos.pawns & pos.idle;
     for_sq!(sq in actv_pawns => {
-        let (rank, file) = (sq / 8, (sq % 8) as usize);
+        let (rank, file) = (sq.rank(), sq.file() as usize);
         eval += rank.saturating_sub(2) as f32 * lerp(PAWN_RANK_SQRT, mg_eg).powf(3.0);
         eval += popcntf(SUPPORT_MASKS[file] << (rank-1)*8 & actv_pawns) * lerp(PAWN_SUPPORTED, mg_eg);
         if ACTV_PASSED_MASKS[file] << (rank-1)*8 & idle_pawns == 0 { eval += lerp(PAWN_PASSED, mg_eg); }
         if ISOLATED_MASKS[file] & actv_pawns == 0 { eval += lerp(PAWN_ISOLATED, mg_eg); }
-        if FILE << file & actv_pawns & !(1 << sq) != 0 { eval += lerp(PAWN_DOUBLED, mg_eg); }
+        if FILE << file & actv_pawns & !sq.bm() != 0 { eval += lerp(PAWN_DOUBLED, mg_eg); }
     });
     for_sq!(sq in idle_pawns => {
-        let (rank, file) = (sq / 8, (sq % 8) as usize);
+        let (rank, file) = (sq.rank(), sq.file() as usize);
         eval -= 5u8.saturating_sub(rank) as f32 * lerp(PAWN_RANK_SQRT, mg_eg).powf(3.0);
         eval -= popcntf(SUPPORT_MASKS[file] << (rank-1)*8 & idle_pawns) * lerp(PAWN_SUPPORTED, mg_eg);
         if IDLE_PASSED_MASKS[file] >> (6-rank)*8 & actv_pawns == 0 { eval -= lerp(PAWN_PASSED, mg_eg); }
         if ISOLATED_MASKS[file] & idle_pawns == 0 { eval -= lerp(PAWN_ISOLATED, mg_eg); }
-        if FILE << file & idle_pawns & !(1 << sq) != 0 { eval -= lerp(PAWN_DOUBLED, mg_eg); }
+        if FILE << file & idle_pawns & !sq.bm() != 0 { eval -= lerp(PAWN_DOUBLED, mg_eg); }
     });
 
     eval as i16
@@ -169,12 +165,6 @@ const FILE: u64 = 0x0101010101010101;
 const LIGHT: u64 = 0x55AA55AA55AA55AA;
 const DARK: u64 = 0xAA55AA55AA55AA55;
 
-const KING_IDX: usize   = Piece::King as usize;
-const QUEEN_IDX: usize  = Piece::Queen as usize;
-const ROOK_IDX: usize   = Piece::Rook as usize;
-const BISHOP_IDX: usize = Piece::Bishop as usize;
-const KNIGHT_IDX: usize = Piece::Knight as usize;
-const PAWN_IDX: usize   = Piece::Pawn as usize;
 
 // Pawn masks by file
 const SUPPORT_MASKS: [u64; 8] = [ // assumes rank 2

@@ -240,6 +240,8 @@ impl TtBucket {
 
 #[cfg(test)]
 mod tests {
+    use crate::{Sq, Move, Piece};
+
     use super::*;
 
     #[test]
@@ -254,10 +256,10 @@ mod tests {
         assert!(tt.get(0x234).is_none());
 
         tt.insert(0xa09b67a, SearchNode::Normal {
-            score_kind: ScoreKind::HiBound, data: TtData { score: 1, draft: 3, pv: crate::Move::new(0, 0, crate::Piece::Pawn) } 
+            score_kind: ScoreKind::HiBound, data: TtData { score: 1, draft: 3, pv: Move::new(Sq::A1, Sq::A2, Piece::Pawn) } 
         }, |_| panic!());
         assert_eq!(tt.get(0xa09b67a).unwrap(), SearchNode::Normal {
-            score_kind: ScoreKind::HiBound, data: TtData { score: 1, draft: 3, pv: crate::Move::new(0, 0, crate::Piece::Pawn) } 
+            score_kind: ScoreKind::HiBound, data: TtData { score: 1, draft: 3, pv: Move::new(Sq::A1, Sq::A2, Piece::Pawn) } 
         });
     }
 }

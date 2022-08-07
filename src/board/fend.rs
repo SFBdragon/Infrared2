@@ -1,44 +1,46 @@
 //! Piece move/defend masks and generation.
 
+use crate::Sq;
+
 #[inline]
-pub fn pawn_fend_actv(sq: u8) -> u64 {
-    PAWNS_FEND_MASKS_ACTV[sq as usize]
+pub fn pawn_fend_actv(sq: Sq) -> u64 {
+    PAWNS_FEND_MASKS_ACTV[sq.us()]
 }
 #[inline]
-pub fn pawn_fend_idle(sq: u8) -> u64 {
-    PAWNS_FEND_MASKS_IDLE[sq as usize]
+pub fn pawn_fend_idle(sq: Sq) -> u64 {
+    PAWNS_FEND_MASKS_IDLE[sq.us()]
 }
 #[inline]
-pub(crate) fn pawn_fend_idle_wall(sq: u8, _all: u64) -> u64 {
-    PAWNS_FEND_MASKS_IDLE[sq as usize]
+pub(crate) fn pawn_fend_idle_wall(sq: Sq, _all: u64) -> u64 {
+    PAWNS_FEND_MASKS_IDLE[sq.us()]
 }
 #[inline]
-pub fn knight_fend(sq: u8) -> u64 {
-    KNIGHT_FEND_MASKS[sq as usize]
+pub fn knight_fend(sq: Sq) -> u64 {
+    KNIGHT_FEND_MASKS[sq.us()]
 }
 #[inline]
-pub(crate) fn knight_fend_wall(sq: u8, _all: u64) -> u64 {
-    KNIGHT_FEND_MASKS[sq as usize]
+pub(crate) fn knight_fend_wall(sq: Sq, _all: u64) -> u64 {
+    KNIGHT_FEND_MASKS[sq.us()]
 }
 #[inline]
-pub fn rook_fend(sq: u8, all: u64) -> u64 {
-    let (offset, mask, magic, shift) = ROOK_MAGIC_DATA[sq as usize];
+pub fn rook_fend(sq: Sq, all: u64) -> u64 {
+    let (offset, mask, magic, shift) = ROOK_MAGIC_DATA[sq.us()];
     let index = (all & mask).wrapping_mul(magic) as usize >> shift;
     ROOK_FEND_MASKS[offset + index]
 }
 #[inline]
-pub fn bishop_fend(sq: u8, all: u64) -> u64 {
-    let (offset, mask, magic, shift) = BISHOP_MAGIC_DATA[sq as usize];
+pub fn bishop_fend(sq: Sq, all: u64) -> u64 {
+    let (offset, mask, magic, shift) = BISHOP_MAGIC_DATA[sq.us()];
     let index = (all & mask).wrapping_mul(magic) as usize >> shift;
     BISHOP_FEND_MASKS[offset + index]
 }
 #[inline]
-pub fn queen_fend(sq: u8, all: u64) -> u64 {
+pub fn queen_fend(sq: Sq, all: u64) -> u64 {
     rook_fend(sq, all) | bishop_fend(sq, all)
 }
 #[inline]
-pub fn king_fend(sq: u8) -> u64 {
-    KING_FEND_MASKS[sq as usize]
+pub fn king_fend(sq: Sq) -> u64 {
+    KING_FEND_MASKS[sq.us()]
 }
 
 

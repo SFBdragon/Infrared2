@@ -142,70 +142,78 @@ msk |= col << rank;
 print!("{:#x}, ", msk & !(1 << i)); */
 } */
 
-pub fn unmake(&mut self, from: u64, to: u64, piece: Piece, data: UnmakeData) {
-        self.move_count -= (self.colour + 1 >> 1) as usize;
-        self.colour = -self.colour;
-        swap(&mut self.actv, &mut self.idle);
-        self.pawns = self.pawns.swap_bytes();
-        self.knights = self.knights.swap_bytes();
-        self.bishops = self.bishops.swap_bytes();
-        self.rooks = self.rooks.swap_bytes();
-        self.queens = self.queens.swap_bytes();
-        self.kings = self.kings.swap_bytes();
-        self.actv = self.actv.swap_bytes();
-        self.idle = self.idle.swap_bytes();
-        
 
-        
+
+    /* pub fn unmake(&mut self, Move { from_sq, to_sq, piece }: Move, unmake: &Unmake) {
+        let from = 1u64 << from_sq;
+        let to = 1u64 << to_sq;
+
+        self.move_count -= (self.colour + 1) as u16 >> 1;
+        self.flip();
+
+        // update actv
+        self.actv = self.actv & !to | from;
+        // handle pawn promotions
+        if unmake.pawn_move && piece != Piece::Pawn {
+            self.pawns |= from;
+            match piece {
+                Piece::Queen =>  self.queens &= !to,
+                Piece::Rook =>   self.rooks &= !to,
+                Piece::Bishop => self.bishops &= !to,
+                Piece::Knight => self.knights &= !to,
+                _ => panic!(),
+            }
+        }
+
+        // update moved piece
         match piece {
-            Piece::Pawn =>   self.pawns = self.pawns     & !to | from,
+            Piece::Pawn =>   self.pawns = self.pawns & !to | from,
             Piece::Knight => self.knights = self.knights & !to | from,
             Piece::Bishop => self.bishops = self.bishops & !to | from,
-            Piece::Rook =>   self.rooks = self.rooks     & !to | from,
-            Piece::Queen =>  self.queens = self.queens   & !to | from,
+            Piece::Queen =>  self.queens = self.queens & !to | from,
+            Piece::Rook =>   self.rooks = self.rooks & !to | from,
             Piece::King => {
-                self.kings = self.kings & !to | from;
+                self.actv_king_sq = from_sq;
                 if from == to >> 2 { // kingside castle!
                     self.rooks = self.rooks & !0x20 | 0x80;
+                    self.actv = self.actv & !0x20 | 0x80;
                 } else if from == to << 2 { // queenside castle!
                     self.rooks = self.rooks & !0x8 | 0x1;
+                    self.actv = self.actv & !0x8 | 0x1;
                 }
             }
         }
 
-        self.actv = self.actv & !to | from;
-
-        match data.capture {
-            Capture::None => (),
-            Capture::Pawn => {
-                self.idle |= to;
-                self.pawns |= to;
-            },
-            Capture::Knight => {
-                self.idle |= to;
-                self.knights |= to;
-            },
-            Capture::Bishop => {
-                self.idle |= to;
-                self.bishops |= to;
-            },
-            Capture::Rook => {
-                self.idle |= to;
-                self.rooks |= to;
-            },
-            Capture::Queen => {
-                self.idle |= to;
-                self.queens |= to;
-            },
-            Capture::EnPassant => {
-                self.idle |= to >> 8;
-                self.pawns |= to >> 8;
-            },
+        // handle capture
+        if let Some(cap) = unmake.capture {
+            match cap {
+                Capture::Normal(piece) => {
+                    self.idle |= to;
+                    match piece {
+                        Piece::Pawn => self.pawns |= to,
+                        Piece::Knight => self.knights |= to,
+                        Piece::Bishop => self.bishops |= to,
+                        Piece::Rook => self.rooks |= to,
+                        Piece::Queen => self.queens |= to,
+                        Piece::King => unreachable!(),
+                    }
+                },
+                Capture::EnPassant => {
+                    let cap = to >> 8;
+                    self.pawns |= cap;
+                    self.idle |= cap;
+                },
+            }
         }
 
-        self.ninc = data.ninc;
         self.all = self.actv | self.idle;
-    }
+
+        self.actv_castle_flags = unmake.actv_castle_flags;
+        self.idle_castle_flags = unmake.idle_castle_flags;
+        self.fifty_move_clock = unmake.fifty_move_clock;
+        self.hash = unmake.hash;
+        self.en_passant = unmake.en_passant;
+    } */
 
 
 pub struct PureCoordMove {

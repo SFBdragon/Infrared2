@@ -1,4 +1,4 @@
-use crate::{for_sq, Board, Move, board::fend, Piece};
+use crate::{for_sq, Board, Move, board::fend, Piece, Sq};
 
 use super::SearchData;
 
@@ -13,15 +13,15 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
     // PV move
     if let Some(pv) = pv {
         if f(pv, board, data) { return; }
-        already_moved[pv.from_sq as usize] |= 1 << pv.to_sq;
+        already_moved[pv.from.us()] |= pv.to.bm();
     }
 
     /* //countermove
-    if let Some(counter) = data.counters[prev_move.piece as usize][prev_move.to_sq as usize] {
+    if let Some(counter) = data.counters[prev_move.piece as usize][prev_move.to as usize] {
         if board.is_valid_move(counter) && board.is_move_legal(counter) {
-            if already_moved[counter.from_sq as usize] & 1 << counter.to_sq == 0 {
+            if already_moved[counter.from as usize] & 1 << counter.to == 0 {
                 if f(counter, board, data) { return; }
-                already_moved[counter.from_sq as usize] |= 1 << counter.to_sq;
+                already_moved[counter.from as usize] |= 1 << counter.to;
             }
         }
     } */
@@ -31,10 +31,10 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
         let (k1, k2) = data.killers[depth as usize];
         for k in [k1, k2] {
             if let Some(k) = k {
-                if already_moved[k.from_sq as usize] & 1 << k.to_sq == 0 {
+                if already_moved[k.from.us()] & k.to.bm() == 0 {
                     if board.is_valid(k) {
                         if f(k, board, data) { return; }
-                        already_moved[k.from_sq as usize] |= 1 << k.to_sq;
+                        already_moved[k.from.us()] |= k.to.bm();
                     }
                 }
             }
@@ -45,15 +45,15 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
 
 
     let mvv_lva = [
-        (board.queens,  Piece::Queen,  fend::queen_fend       as fn(u8, u64) -> u64), 
-        (board.rooks,   Piece::Rook,   fend::rook_fend        as fn(u8, u64) -> u64), 
-        (board.bishops, Piece::Bishop, fend::bishop_fend      as fn(u8, u64) -> u64), 
-        (board.knights, Piece::Knight, fend::knight_fend_wall as fn(u8, u64) -> u64), 
-        (board.pawns & 0xFFFFFFFFFF00, Piece::Pawn, fend::pawn_fend_idle_wall as fn(u8, u64) -> u64), 
+        (board.queens,  Piece::Queen,  fend::queen_fend       as fn(Sq, u64) -> u64), 
+        (board.rooks,   Piece::Rook,   fend::rook_fend        as fn(Sq, u64) -> u64), 
+        (board.bishops, Piece::Bishop, fend::bishop_fend      as fn(Sq, u64) -> u64), 
+        (board.knights, Piece::Knight, fend::knight_fend_wall as fn(Sq, u64) -> u64), 
+        (board.pawns & 0xFFFFFFFFFF00, Piece::Pawn, fend::pawn_fend_idle_wall as fn(Sq, u64) -> u64), 
     ];
 
     /* // recapture on last move where possible
-    let idle_to_sq = crate::board::flip_sq(prev_move.to_sq);
+    let idle = crate::board::flip_sq(prev_move.to_sq);
     for lva in (0..mvv_lva.len()).rev() {
         let (lvas, p, fend_fn) = mvv_lva[lva];
         for_sq!(asq in fend_fn(idle_to_sq, board.all) & lvas & board.actv => {
@@ -72,10 +72,10 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
             for lva in (0..mvv_lva.len()).rev() {
                 let (lvas, p, fend_fn) = mvv_lva[lva];
                 for_sq!(asq in fend_fn(vsq, board.all) & lvas & board.actv => {
-                    if already_moved[asq as usize] & 1 << vsq == 0 {
+                    if already_moved[asq.us()] & vsq.bm() == 0 {
                         let mov = Move::new(asq, vsq, p);
                         if board.is_legal(mov) && f(mov, board, data) { return; }
-                        already_moved[asq as usize] |= 1 << vsq;
+                        already_moved[asq.us()] |= vsq.bm();
                     }
                 });
             }
@@ -83,7 +83,7 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
     }
 
     board.for_mov(|mov| {
-        already_moved[mov.from_sq as usize] & 1 << mov.to_sq == 0
+        already_moved[mov.from.us()] & mov.to.bm() == 0
         && f(mov, board, data)
     });
 
@@ -129,15 +129,15 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
     // PV move
     if let Some(pv) = pv {
         if f(pv, board, data) { return; }
-        already_moved[pv.from_sq as usize] |= 1 << pv.to_sq;
+        already_moved[pv.from.us()] |= pv.to.bm();
     }
 
     let mvv_lva = [
-        (board.queens,  Piece::Queen,  fend::queen_fend          as fn(u8, u64) -> u64), 
-        (board.rooks,   Piece::Rook,   fend::rook_fend           as fn(u8, u64) -> u64), 
-        (board.bishops, Piece::Bishop, fend::bishop_fend         as fn(u8, u64) -> u64), 
-        (board.knights, Piece::Knight, fend::knight_fend_wall    as fn(u8, u64) -> u64), 
-        (board.pawns & 0xFFFFFFFFFF00, Piece::Pawn, fend::pawn_fend_idle_wall as fn(u8, u64) -> u64), 
+        (board.queens,  Piece::Queen,  fend::queen_fend       as fn(Sq, u64) -> u64), 
+        (board.rooks,   Piece::Rook,   fend::rook_fend        as fn(Sq, u64) -> u64), 
+        (board.bishops, Piece::Bishop, fend::bishop_fend      as fn(Sq, u64) -> u64), 
+        (board.knights, Piece::Knight, fend::knight_fend_wall as fn(Sq, u64) -> u64), 
+        (board.pawns & 0xFFFFFFFFFF00, Piece::Pawn, fend::pawn_fend_idle_wall as fn(Sq, u64) -> u64), 
     ];
 
     // MVV-LVA
@@ -147,10 +147,10 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
             for lva in (mvv..mvv_lva.len()).rev() {
                 let (lvas, p, fend_fn) = mvv_lva[lva];
                 for_sq!(asq in fend_fn(vsq, board.all) & lvas & board.actv => {
-                    if already_moved[asq as usize] & 1 << vsq == 0 {
+                    if already_moved[asq.us()] & vsq.bm() == 0 {
                         let mov = Move::new(asq, vsq, p);
                         if board.is_legal(mov) && f(mov, board, data) { return; }
-                        already_moved[asq as usize] |= 1 << vsq;
+                        already_moved[asq.us()] |= vsq.bm();
                     }
                 });
             }
@@ -163,9 +163,9 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
         for k in [k1, k2] {
             if let Some(k) = k {
                 if board.is_valid(k) {
-                    if already_moved[k.from_sq as usize] & 1 << k.to_sq == 0 {
+                    if already_moved[k.from.us()] & k.to.bm() == 0 {
                         if f(k, board, data) { return; }
-                        already_moved[k.from_sq as usize] |= 1 << k.to_sq;
+                        already_moved[k.from.us()] |= k.to.bm();
                     }
                 }
             }
@@ -175,7 +175,7 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
     }
 
     board.for_mov(|mov| {
-        already_moved[mov.from_sq as usize] & 1 << mov.to_sq == 0
+        already_moved[mov.from.us()] & mov.to.bm() == 0
         && f(mov, board, data)
     });
 }
@@ -191,11 +191,11 @@ where F: FnMut(Move, &Board) -> bool {
 
     // MVV-LVA
     let mvv_lva = [
-        (board.queens,  Piece::Queen,  fend::queen_fend          as fn(u8, u64) -> u64), 
-        (board.rooks,   Piece::Rook,   fend::rook_fend           as fn(u8, u64) -> u64), 
-        (board.bishops, Piece::Bishop, fend::bishop_fend         as fn(u8, u64) -> u64), 
-        (board.knights, Piece::Knight, fend::knight_fend_wall    as fn(u8, u64) -> u64), 
-        (board.pawns & 0xFFFFFFFFFF00, Piece::Pawn, fend::pawn_fend_idle_wall as fn(u8, u64) -> u64), 
+        (board.queens,  Piece::Queen,  fend::queen_fend       as fn(Sq, u64) -> u64), 
+        (board.rooks,   Piece::Rook,   fend::rook_fend        as fn(Sq, u64) -> u64), 
+        (board.bishops, Piece::Bishop, fend::bishop_fend      as fn(Sq, u64) -> u64), 
+        (board.knights, Piece::Knight, fend::knight_fend_wall as fn(Sq, u64) -> u64), 
+        (board.pawns & 0xFFFFFFFFFF00, Piece::Pawn, fend::pawn_fend_idle_wall as fn(Sq, u64) -> u64), 
     ];
     for mvv in 0..mvv_lva.len() {
         let mvv_bb = mvv_lva[mvv].0;

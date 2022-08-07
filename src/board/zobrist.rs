@@ -2,8 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::for_sq;
-use super::{CastleRights, Piece, Board};
+use crate::{for_sq, Side, Sq, Piece, Board};
 
 
 /// https://www.chessprogramming.org/Bob_Jenkins#RKISS - oxidised
@@ -51,26 +50,32 @@ const CASTLE_OFFSET: usize = 12 * 64;
 const EP_FILE_OFFSET: usize = 12 * 64 + 4;
 const COLOUR_OFFSET: usize = 12 * 64 + 4 + 8;
 
-pub const fn get_piece_hash_actv(colour: bool, piece: Piece, mut sq: u8) -> u64 {
-    let offset = if colour { 0 } else { sq = super::flip_sq(sq); PIECE_OFFSET };
-    PRNS[offset + piece as usize * 64 + sq as usize]
+pub const fn get_piece_hash_actv(side: Side, piece: Piece, mut sq: Sq) -> u64 {
+    let offset = match side {
+        Side::White => 0,
+        Side::Black => { sq = sq.flip(); PIECE_OFFSET },
+    };
+
+    PRNS[offset + piece as usize * 64 + sq.us()]
 }
-pub const fn get_piece_hash_idle(colour: bool, piece: Piece, mut sq: u8) -> u64 {
-    let offset = if colour { sq = super::flip_sq(sq); 0 } else { PIECE_OFFSET };
-    PRNS[offset + piece as usize * 64 + sq as usize]
+pub const fn get_piece_hash_idle(side: Side, piece: Piece, mut sq: Sq) -> u64 {
+    let offset = match side {
+        Side::White => { sq = sq.flip(); 0 },
+        Side::Black => PIECE_OFFSET,
+    };
+
+    PRNS[offset + piece as usize * 64 + sq.us()]
 }
-pub const fn get_hash_ks_castle(colour: bool) -> u64 {
-    if colour {
-        PRNS[CASTLE_OFFSET + 0]
-    } else {
-        PRNS[CASTLE_OFFSET + 2]
+pub const fn get_hash_ks_castle(side: Side) -> u64 {
+    match side {
+        Side::White => PRNS[CASTLE_OFFSET + 0],
+        Side::Black => PRNS[CASTLE_OFFSET + 2],
     }
 }
-pub const fn get_hash_qs_castle(colour: bool) -> u64 {
-    if colour {
-        PRNS[CASTLE_OFFSET + 1]
-    } else {
-        PRNS[CASTLE_OFFSET + 3]
+pub const fn get_hash_qs_castle(side: Side) -> u64 {
+    match side {
+        Side::White => PRNS[CASTLE_OFFSET + 1],
+        Side::Black => PRNS[CASTLE_OFFSET + 3],
     }
 }
 pub const fn get_hash_en_passant(en_passant: u64) -> u64 {
@@ -84,31 +89,30 @@ pub const COLOUR_HASH: u64 = PRNS[COLOUR_OFFSET];
 impl Board {
     pub fn calc_hash(&self) -> u64 {
         let mut hash = 0;
-        let is_actv_white = self.colour == crate::Side::White;
         
-        if is_actv_white {
+        if self.side.is_white() {
             hash ^= COLOUR_HASH;
         }
 
         hash ^= get_hash_en_passant(self.en_passant);
 
-        if self.actv_castle_rights.contains(CastleRights::KINGSIDE)  { hash ^= get_hash_ks_castle(is_actv_white); }
-        if self.actv_castle_rights.contains(CastleRights::QUEENSIDE) { hash ^= get_hash_qs_castle(is_actv_white); }
-        if self.idle_castle_rights.contains(CastleRights::KINGSIDE)  { hash ^= get_hash_ks_castle(!is_actv_white); }
-        if self.idle_castle_rights.contains(CastleRights::QUEENSIDE) { hash ^= get_hash_qs_castle(!is_actv_white); }
+        if self.actv_castle_rights.kingside()  { hash ^= get_hash_ks_castle(self.side); }
+        if self.actv_castle_rights.queenside() { hash ^= get_hash_qs_castle(self.side); }
+        if self.idle_castle_rights.kingside()  { hash ^= get_hash_ks_castle(!self.side); }
+        if self.idle_castle_rights.queenside() { hash ^= get_hash_qs_castle(!self.side); }
 
-        for_sq!(sq in self.pawns & self.actv => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Pawn, sq); });
-        for_sq!(sq in self.pawns & self.idle => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Pawn, sq); });
-        for_sq!(sq in self.knights & self.actv => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Knight, sq); });
-        for_sq!(sq in self.knights & self.idle => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Knight, sq); });
-        for_sq!(sq in self.bishops & self.actv => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Bishop, sq); });
-        for_sq!(sq in self.bishops & self.idle => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Bishop, sq); });
-        for_sq!(sq in self.rooks & self.actv => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Rook, sq); });
-        for_sq!(sq in self.rooks & self.idle => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Rook, sq); });
-        for_sq!(sq in self.queens & self.actv => { hash ^= get_piece_hash_actv(is_actv_white, Piece::Queen, sq); });
-        for_sq!(sq in self.queens & self.idle => { hash ^= get_piece_hash_idle(!is_actv_white, Piece::Queen, sq); });
-        hash ^= get_piece_hash_actv(is_actv_white, Piece::King, self.actv_king_sq);
-        hash ^= get_piece_hash_idle(!is_actv_white, Piece::King, self.idle_king_sq);
+        for_sq!(sq in self.pawns & self.actv => { hash ^= get_piece_hash_actv(self.side, Piece::Pawn, sq); });
+        for_sq!(sq in self.pawns & self.idle => { hash ^= get_piece_hash_idle(!self.side, Piece::Pawn, sq); });
+        for_sq!(sq in self.knights & self.actv => { hash ^= get_piece_hash_actv(self.side, Piece::Knight, sq); });
+        for_sq!(sq in self.knights & self.idle => { hash ^= get_piece_hash_idle(!self.side, Piece::Knight, sq); });
+        for_sq!(sq in self.bishops & self.actv => { hash ^= get_piece_hash_actv(self.side, Piece::Bishop, sq); });
+        for_sq!(sq in self.bishops & self.idle => { hash ^= get_piece_hash_idle(!self.side, Piece::Bishop, sq); });
+        for_sq!(sq in self.rooks & self.actv => { hash ^= get_piece_hash_actv(self.side, Piece::Rook, sq); });
+        for_sq!(sq in self.rooks & self.idle => { hash ^= get_piece_hash_idle(!self.side, Piece::Rook, sq); });
+        for_sq!(sq in self.queens & self.actv => { hash ^= get_piece_hash_actv(self.side, Piece::Queen, sq); });
+        for_sq!(sq in self.queens & self.idle => { hash ^= get_piece_hash_idle(!self.side, Piece::Queen, sq); });
+        hash ^= get_piece_hash_actv(self.side, Piece::King, self.actv_king);
+        hash ^= get_piece_hash_idle(!self.side, Piece::King, self.idle_king);
 
         hash
     }
