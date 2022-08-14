@@ -10,7 +10,8 @@ use std::{sync::{Arc, atomic::AtomicBool}, thread::JoinHandle};
 
 pub use dat::*;
 pub use board::Board;
-pub use search::{SearchInfo, SearchEval, ttab::TransTable, time::TimeControl};
+use search::htab::{TransTable, self, PkEvalTable};
+pub use search::{SearchInfo, SearchEval, time::TimeControl};
 
 use crossbeam_channel::{Sender, Receiver};
 use board::zobrist::{PosHashMap, U64IdentHashBuilder};
@@ -143,6 +144,7 @@ impl Game {
     pub fn search(&self,
         time_control: TimeControl, 
         trans_table: Option<Arc<TransTable>>,
+        pk_eval_table: Option<Arc<PkEvalTable>>,
     ) -> SearchHandle {
         let kill_switch = Arc::new(AtomicBool::new(false));
         let (sndr, rcvr) = crossbeam_channel::unbounded();
@@ -159,7 +161,8 @@ impl Game {
                 thread_sndr,
                 thread_kill_switch,
                 time_control.allocate_time(thread_game.book_distance),
-                trans_table.unwrap_or_default(),
+                trans_table.unwrap_or(Arc::new(TransTable::with_memory(htab::TRANS_MEM_DEFAULT))),
+                pk_eval_table.unwrap_or(Arc::new(PkEvalTable::with_memory(htab::PK_EVAL_MEM_DEFAULT))),
             )
         });
 

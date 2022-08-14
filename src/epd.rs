@@ -42,10 +42,10 @@ impl<'a> Iterator for EpdIter<'a> {
         for (key, val) in remaining.split(';').map_while(|ss| ss.trim().split_once(' ')) {
             match key {
                 "id" => data.id = Some(val.trim_matches('"').to_owned()),
-                "bm" => data.bm = Some(val.split(',')
+                "bm" => data.bm = Some(val.split(&[',', ' '])
                     .filter_map(|san| Move::from_san(san.trim(), &data.pos)).collect()
                 ),
-                "am" => data.am = Some(val.split(',')
+                "am" => data.am = Some(val.split(&[',', ' '])
                     .filter_map(|san| Move::from_san(san.trim(), &data.pos)).collect()
                 ),
                 _    => (),

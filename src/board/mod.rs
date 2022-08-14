@@ -24,8 +24,10 @@ pub struct Board {
 
     /// Bitboard of the square behind `prev` pawn double-advance. Else zero.
     pub en_passant: u64,
-    /// Zobrist hash.
+    /// Position zobrist hash.
     pub hash: u64,
+    /// Pawn and king zobrist hash.
+    pub pk_hash: u64,
 
     /// Move count since game begin.
     pub move_count: u16,
@@ -120,9 +122,13 @@ impl Board {
             // remove piece & reset 50-move rule clock
             self.idle &= !to_bm;
             self.fifty_move_clock = 0;
-            self.hash ^= zobrist::get_piece_hash_idle(!self.side, cap, to);
+            let cap_zhash = zobrist::get_piece_hash_idle(!self.side, cap, to);
+            self.hash ^= cap_zhash;
             match cap {
-                Piece::Pawn => self.pawns &= !to_bm,
+                Piece::Pawn => {
+                    self.pawns &= !to_bm;
+                    self.pk_hash ^= cap_zhash; 
+                },
                 Piece::Knight => self.knights &= !to_bm,
                 Piece::Bishop => self.bishops &= !to_bm,
                 Piece::Queen => self.queens &= !to_bm,
@@ -153,11 +159,13 @@ impl Board {
                 self.pawns &= !cap;
                 self.idle &= !cap;
                 self.fifty_move_clock = 0;
-                self.hash ^= zobrist::get_piece_hash_idle(
+                let cap_zhash = zobrist::get_piece_hash_idle(
                     !self.side,
                     Piece::Pawn,
                     Sq::lsb(to.bm() >> 0o10)
                 );
+                self.hash ^= cap_zhash;
+                self.pk_hash ^= cap_zhash;
             }
         }
         
@@ -223,11 +231,21 @@ impl Board {
         // update hash & handle pawn promotions
         if self.pawns & from_bm != 0 {
             self.pawns &= !from_bm;
-            self.hash ^= zobrist::get_piece_hash_actv(self.side, Piece::Pawn, from);
+            let prom_zhash = zobrist::get_piece_hash_actv(self.side, Piece::Pawn, from);
+            self.hash ^= prom_zhash;
+            self.pk_hash ^= prom_zhash;
         } else {
-            self.hash ^= zobrist::get_piece_hash_actv(self.side, piece, from);
+            let from_zhash = zobrist::get_piece_hash_actv(self.side, piece, from);
+            self.hash ^= from_zhash;
+            if matches!(piece, Piece::Pawn | Piece::King) {
+                self.pk_hash ^= from_zhash;
+            }
         }
-        self.hash ^= zobrist::get_piece_hash_actv(self.side, piece, to);
+        let to_zhash = zobrist::get_piece_hash_actv(self.side, piece, to);
+        self.hash ^= to_zhash;
+        if matches!(piece, Piece::Pawn | Piece::King) {
+            self.pk_hash ^= to_zhash;
+        }
 
         // bookkeeping
         self.flip();
@@ -345,7 +363,8 @@ impl Board {
         as_result!(!self.is_idle_in_check())?;
 
         // validate misc data as best as possible
-        as_result!(self.hash == self.calc_hash())?;
+        as_result!(self.hash == zobrist::compute_hash(&self))?;
+        as_result!(self.pk_hash == zobrist::compute_pk_hash(&self))?;
         as_result!(self.fifty_move_clock <= (self.move_count - 1) * 2 + 1)?;
 
         Ok(())

@@ -1,8 +1,10 @@
-use crate::{Board, Sq, for_sq, board::fend, KING, QUEEN, ROOK, BISHOP, KNIGHT, PAWN};
+use crate::{Board, Sq, for_sq, board::fend, KING, QUEEN, ROOK, BISHOP, KNIGHT, PAWN, search::htab::PawnKingEval};
 
+use super::htab::PkEvalTable;
 
 pub const DRAW: i16 = 0;
 pub const MATE: i16 = -32000;
+pub const UNCERTAIN_MATE: i16 = -31000;
 
 pub fn basic_mat_eval(board: &Board) -> i16 {
     let mut material = 0;
@@ -32,7 +34,7 @@ fn popcntf(bb: u64) -> f32 {
 }
 
 
-pub fn eval(pos: &Board) -> i16 {
+pub fn eval(pos: &Board, peht: &PkEvalTable) -> i16 {
     let mut eval = 0.0f32;
 
     let actv_pawn_count   = popcntf(pos.pawns   & pos.actv);
@@ -127,36 +129,55 @@ pub fn eval(pos: &Board) -> i16 {
     // rough heuristic; quescience searching should be doing most of this legwork
     eval += (popcntf(actv_cvrd & pos.all) - popcntf(idle_cvrd & pos.all)) * FEND;
 
-    // king safety + piece sq
-    eval += lerp(PIECE_SQ[KING as usize][pos.actv_king.rank() as usize][fold_file(pos.actv_king.file() as usize)], mg_eg);
-    let actv_king_ring = fend::king_fend(pos.actv_king)/*  &! (IDLE_PASSED_MASKS[actv_king%8] >> 7-actv_king/8) */;
-    eval += popcntf(actv_king_ring & pos.pawns & pos.actv) * lerp(KING_RING_PAWN, mg_eg);
-    eval += popcntf(idle_cvrd & actv_king_ring) * lerp(KING_RING_ATT, mg_eg);
 
-    eval -= lerp(PIECE_SQ[KING as usize][7-pos.idle_king.rank() as usize][fold_file(pos.idle_king.file() as usize)], mg_eg);
-    let idle_king_ring = fend::king_fend(pos.idle_king)/*  &! (ACTV_PASSED_MASKS[idle_king%8] << idle_king/8) */;
-    eval -= popcntf(idle_king_ring & pos.pawns & pos.idle) * lerp(KING_RING_PAWN, mg_eg);
-    eval -= popcntf(actv_cvrd & idle_king_ring) * lerp(KING_RING_ATT, mg_eg);
 
-    // pawn structure
-    let actv_pawns = pos.pawns & pos.actv;
-    let idle_pawns = pos.pawns & pos.idle;
-    for_sq!(sq in actv_pawns => {
-        let (rank, file) = (sq.rank(), sq.file() as usize);
-        eval += rank.saturating_sub(2) as f32 * lerp(PAWN_RANK_SQRT, mg_eg).powf(3.0);
-        eval += popcntf(SUPPORT_MASKS[file] << (rank-1)*8 & actv_pawns) * lerp(PAWN_SUPPORTED, mg_eg);
-        if ACTV_PASSED_MASKS[file] << (rank-1)*8 & idle_pawns == 0 { eval += lerp(PAWN_PASSED, mg_eg); }
-        if ISOLATED_MASKS[file] & actv_pawns == 0 { eval += lerp(PAWN_ISOLATED, mg_eg); }
-        if FILE << file & actv_pawns & !sq.bm() != 0 { eval += lerp(PAWN_DOUBLED, mg_eg); }
-    });
-    for_sq!(sq in idle_pawns => {
-        let (rank, file) = (sq.rank(), sq.file() as usize);
-        eval -= 5u8.saturating_sub(rank) as f32 * lerp(PAWN_RANK_SQRT, mg_eg).powf(3.0);
-        eval -= popcntf(SUPPORT_MASKS[file] << (rank-1)*8 & idle_pawns) * lerp(PAWN_SUPPORTED, mg_eg);
-        if IDLE_PASSED_MASKS[file] >> (6-rank)*8 & actv_pawns == 0 { eval -= lerp(PAWN_PASSED, mg_eg); }
-        if ISOLATED_MASKS[file] & idle_pawns == 0 { eval -= lerp(PAWN_ISOLATED, mg_eg); }
-        if FILE << file & idle_pawns & !sq.bm() != 0 { eval -= lerp(PAWN_DOUBLED, mg_eg); }
-    });
+
+    let mut pk_eval = 0.0;
+    // don't ignore large differences in mg_eg
+    let pk_hash_mg_eg = pos.pk_hash * (mg_eg * 8.0) as u64;
+
+    if let Some(cached_pk_eval) = peht.get(pk_hash_mg_eg) {
+        pk_eval = cached_pk_eval.eval;
+    } else {
+        let actv_king_ring = fend::king_fend(pos.actv_king)/*  &! (IDLE_PASSED_MASKS[actv_king%8] >> 7-actv_king/8) */;
+        let idle_king_ring = fend::king_fend(pos.idle_king)/*  &! (ACTV_PASSED_MASKS[idle_king%8] << idle_king/8) */;
+
+        // king safety + piece sq
+        pk_eval += lerp(PIECE_SQ[KING as usize][pos.actv_king.rank() as usize][fold_file(pos.actv_king.file() as usize)], mg_eg);
+        pk_eval += popcntf(actv_king_ring & pos.pawns & pos.actv) * lerp(KING_RING_PAWN, mg_eg);
+    
+        pk_eval -= lerp(PIECE_SQ[KING as usize][7-pos.idle_king.rank() as usize][fold_file(pos.idle_king.file() as usize)], mg_eg);
+        pk_eval -= popcntf(idle_king_ring & pos.pawns & pos.idle) * lerp(KING_RING_PAWN, mg_eg);
+        
+        pk_eval += popcntf(idle_cvrd & actv_king_ring) * lerp(KING_RING_ATT, mg_eg);
+        pk_eval -= popcntf(actv_cvrd & idle_king_ring) * lerp(KING_RING_ATT, mg_eg);
+    
+        // pawn structure
+        let actv_pawns = pos.pawns & pos.actv;
+        let idle_pawns = pos.pawns & pos.idle;
+        for_sq!(sq in actv_pawns => {
+            let (rank, file) = (sq.rank(), sq.file() as usize);
+            pk_eval += rank.saturating_sub(2) as f32 * lerp(PAWN_RANK_SQRT, mg_eg).powf(3.0);
+            pk_eval += popcntf(SUPPORT_MASKS[file] << (rank-1)*8 & actv_pawns) * lerp(PAWN_SUPPORTED, mg_eg);
+            if ACTV_PASSED_MASKS[file] << (rank-1)*8 & idle_pawns == 0 { pk_eval += lerp(PAWN_PASSED, mg_eg); }
+            if ISOLATED_MASKS[file] & actv_pawns == 0 { pk_eval += lerp(PAWN_ISOLATED, mg_eg); }
+            if FILE << file & actv_pawns & !sq.bm() != 0 { pk_eval += lerp(PAWN_DOUBLED, mg_eg); }
+        });
+        for_sq!(sq in idle_pawns => {
+            let (rank, file) = (sq.rank(), sq.file() as usize);
+            pk_eval -= 5u8.saturating_sub(rank) as f32 * lerp(PAWN_RANK_SQRT, mg_eg).powf(3.0);
+            pk_eval -= popcntf(SUPPORT_MASKS[file] << (rank-1)*8 & idle_pawns) * lerp(PAWN_SUPPORTED, mg_eg);
+            if IDLE_PASSED_MASKS[file] >> (6-rank)*8 & actv_pawns == 0 { pk_eval -= lerp(PAWN_PASSED, mg_eg); }
+            if ISOLATED_MASKS[file] & idle_pawns == 0 { pk_eval -= lerp(PAWN_ISOLATED, mg_eg); }
+            if FILE << file & idle_pawns & !sq.bm() != 0 { pk_eval -= lerp(PAWN_DOUBLED, mg_eg); }
+        });
+
+        peht.insert(pk_hash_mg_eg, PawnKingEval { eval: pk_eval }, |_| true);
+    }
+
+    eval += pk_eval;
+    /* eval += popcntf(idle_cvrd & actv_king_ring) * lerp(KING_RING_ATT, mg_eg);
+    eval -= popcntf(actv_cvrd & idle_king_ring) * lerp(KING_RING_ATT, mg_eg); */
 
     eval as i16
 }
@@ -240,7 +261,7 @@ const PAWN_SUPPORTED: [f32; 2] = [ 12.0,  20.0];
 const PAWN_PASSED   : [f32; 2] = [ 30.0,  65.0];
 const PAWN_RANK_SQRT: [f32; 2] = [  2.0,   3.4];
 const KING_RING_PAWN: [f32; 2] = [ 60.0,  12.0];
-const KING_RING_ATT : [f32; 2] = [-50.0, -30.0];
+const KING_RING_ATT : [f32; 2] = [-35.0, -20.0];
 
 
 // Stockfish piece-square table values, ripped from here on 2022/07/05:

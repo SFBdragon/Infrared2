@@ -1,6 +1,6 @@
 use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, io::Write};
 
-use infra::{Move, Board, Piece, SearchInfo, SearchEval, TransTable, Game, SearchHandle, Side, opening, TimeControl, Sq};
+use infra::{Move, Board, Piece, SearchInfo, SearchEval, Game, SearchHandle, Side, opening, TimeControl, Sq, search::htab::{TransTable, self, PkEvalTable}};
 use crossbeam_channel::{Sender, Receiver};
 use vampirc_uci::{
     UciMessage, 
@@ -31,7 +31,8 @@ pub fn uci() {
     let _ = infra::opening::query_book(0);
 
     // Transposition table is only reset on newgames
-    let mut trans_table = Arc::new(TransTable::default());
+    let mut trans_table = Arc::new(TransTable::with_memory(htab::TRANS_MEM_DEFAULT));
+    let mut pk_eval_table = Arc::new(PkEvalTable::with_memory(htab::PK_EVAL_MEM_DEFAULT));
 
     let mut search_control: Option<SearchControl> = None;
 
@@ -96,7 +97,8 @@ pub fn uci() {
                             }
                             position = None;
                             best_move = None;
-                            trans_table = Arc::new(TransTable::default());
+                            trans_table = Arc::new(TransTable::with_memory(htab::TRANS_MEM_DEFAULT));
+                            pk_eval_table = Arc::new(PkEvalTable::with_memory(htab::PK_EVAL_MEM_DEFAULT));
                         }
                         UciMessage::Position { startpos, fen, moves } => {
                             search_control = None;
@@ -136,6 +138,7 @@ pub fn uci() {
                                     let search_handle = game.search(
                                         time_control, 
                                         Some(trans_table.clone()),
+                                        Some(pk_eval_table.clone()),
                                     );
 
                                     search_control = Some(SearchControl {

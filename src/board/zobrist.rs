@@ -86,37 +86,48 @@ pub const COLOUR_HASH: u64 = PRNS[COLOUR_OFFSET];
 
 
 
-impl Board {
-    pub fn calc_hash(&self) -> u64 {
-        let mut hash = 0;
-        
-        if self.side.is_white() {
-            hash ^= COLOUR_HASH;
-        }
-
-        hash ^= get_hash_en_passant(self.en_passant);
-
-        if self.actv_castle_rights.kingside()  { hash ^= get_hash_ks_castle(self.side); }
-        if self.actv_castle_rights.queenside() { hash ^= get_hash_qs_castle(self.side); }
-        if self.idle_castle_rights.kingside()  { hash ^= get_hash_ks_castle(!self.side); }
-        if self.idle_castle_rights.queenside() { hash ^= get_hash_qs_castle(!self.side); }
-
-        for_sq!(sq in self.pawns & self.actv => { hash ^= get_piece_hash_actv(self.side, Piece::Pawn, sq); });
-        for_sq!(sq in self.pawns & self.idle => { hash ^= get_piece_hash_idle(!self.side, Piece::Pawn, sq); });
-        for_sq!(sq in self.knights & self.actv => { hash ^= get_piece_hash_actv(self.side, Piece::Knight, sq); });
-        for_sq!(sq in self.knights & self.idle => { hash ^= get_piece_hash_idle(!self.side, Piece::Knight, sq); });
-        for_sq!(sq in self.bishops & self.actv => { hash ^= get_piece_hash_actv(self.side, Piece::Bishop, sq); });
-        for_sq!(sq in self.bishops & self.idle => { hash ^= get_piece_hash_idle(!self.side, Piece::Bishop, sq); });
-        for_sq!(sq in self.rooks & self.actv => { hash ^= get_piece_hash_actv(self.side, Piece::Rook, sq); });
-        for_sq!(sq in self.rooks & self.idle => { hash ^= get_piece_hash_idle(!self.side, Piece::Rook, sq); });
-        for_sq!(sq in self.queens & self.actv => { hash ^= get_piece_hash_actv(self.side, Piece::Queen, sq); });
-        for_sq!(sq in self.queens & self.idle => { hash ^= get_piece_hash_idle(!self.side, Piece::Queen, sq); });
-        hash ^= get_piece_hash_actv(self.side, Piece::King, self.actv_king);
-        hash ^= get_piece_hash_idle(!self.side, Piece::King, self.idle_king);
-
-        hash
+pub fn compute_hash(board: &Board) -> u64 {
+    let mut hash = 0;
+    
+    if board.side.is_white() {
+        hash ^= COLOUR_HASH;
     }
+
+    hash ^= get_hash_en_passant(board.en_passant);
+
+    if board.actv_castle_rights.kingside()  { hash ^= get_hash_ks_castle(board.side); }
+    if board.actv_castle_rights.queenside() { hash ^= get_hash_qs_castle(board.side); }
+    if board.idle_castle_rights.kingside()  { hash ^= get_hash_ks_castle(!board.side); }
+    if board.idle_castle_rights.queenside() { hash ^= get_hash_qs_castle(!board.side); }
+
+    for_sq!(sq in board.pawns & board.actv => { hash ^= get_piece_hash_actv(board.side, Piece::Pawn, sq); });
+    for_sq!(sq in board.pawns & board.idle => { hash ^= get_piece_hash_idle(!board.side, Piece::Pawn, sq); });
+    for_sq!(sq in board.knights & board.actv => { hash ^= get_piece_hash_actv(board.side, Piece::Knight, sq); });
+    for_sq!(sq in board.knights & board.idle => { hash ^= get_piece_hash_idle(!board.side, Piece::Knight, sq); });
+    for_sq!(sq in board.bishops & board.actv => { hash ^= get_piece_hash_actv(board.side, Piece::Bishop, sq); });
+    for_sq!(sq in board.bishops & board.idle => { hash ^= get_piece_hash_idle(!board.side, Piece::Bishop, sq); });
+    for_sq!(sq in board.rooks & board.actv => { hash ^= get_piece_hash_actv(board.side, Piece::Rook, sq); });
+    for_sq!(sq in board.rooks & board.idle => { hash ^= get_piece_hash_idle(!board.side, Piece::Rook, sq); });
+    for_sq!(sq in board.queens & board.actv => { hash ^= get_piece_hash_actv(board.side, Piece::Queen, sq); });
+    for_sq!(sq in board.queens & board.idle => { hash ^= get_piece_hash_idle(!board.side, Piece::Queen, sq); });
+    hash ^= get_piece_hash_actv(board.side, Piece::King, board.actv_king);
+    hash ^= get_piece_hash_idle(!board.side, Piece::King, board.idle_king);
+
+    hash
 }
+
+pub fn compute_pk_hash(board: &Board) -> u64 {
+    let mut hash = 0;
+
+    for_sq!(sq in board.pawns & board.actv => { hash ^= get_piece_hash_actv(board.side, Piece::Pawn, sq); });
+    for_sq!(sq in board.pawns & board.idle => { hash ^= get_piece_hash_idle(!board.side, Piece::Pawn, sq); });
+    hash ^= get_piece_hash_actv(board.side, Piece::King, board.actv_king);
+    hash ^= get_piece_hash_idle(!board.side, Piece::King, board.idle_king);
+
+    hash
+}
+
+
 
 #[derive(Debug, Clone, Copy)]
 pub struct U64IdentHasher {

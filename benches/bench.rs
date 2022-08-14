@@ -1,6 +1,6 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use infra::{board::{Board, Piece, Move}, search::{pvs, ttab}};
+use infra::{board::{Board, Piece, Move}, search::{pvs, htab}};
 
 fn bench_board_methods(c: &mut Criterion) {
     let fen = "r1bqkbnr/pppp2pp/2n5/1B2pp2/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4";

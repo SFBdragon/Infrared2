@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use crate::{Sq, Board, Piece, Side, Move, GameOver, CastleRights};
+use crate::{Sq, Board, Piece, Side, Move, GameOver, CastleRights, board::zobrist};
 
 
 impl Sq {
@@ -319,6 +319,7 @@ impl Board {
         
         let mut board = Self {
             hash: 0,
+            pk_hash: 0,
             all: white | black,
             actv: if side.is_white() { white } else { black },
             idle: if side.is_black() { white } else { black },
@@ -337,8 +338,9 @@ impl Board {
             idle_castle_rights: if side.is_black() { white_castle_rights } else { black_castle_rights },
         };
 
-        // once everything is said an done, calculate the hash
-        board.hash = board.calc_hash();
+        // once everything is said an done, compute the hashes
+        board.hash = zobrist::compute_hash(&board);
+        board.pk_hash = zobrist::compute_pk_hash(&board);
         // then validate the position
         board.validate().map(|_| board)
     }

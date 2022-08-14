@@ -5,6 +5,7 @@ edition = "2021"
 
 [profile.release]
 opt-level=3
+debug=true
 
 [dependencies]
 vampirc-uci = "0.11"

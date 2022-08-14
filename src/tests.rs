@@ -1,5 +1,6 @@
 //! Chess search engine tests for benchmarking and iterating.
 
+use std::io::Write;
 use std::time::Duration;
 use crossbeam_channel::Receiver;
 
@@ -11,7 +12,7 @@ pub fn test_pos() {
     let fen = "r1b2rk1/2q1b1pp/p2ppn2/1p6/3QP3/1BN1B3/PPP3PP/R4RK1 w - - 0 1";
 
     let game = Game::new(Board::from_fen(fen).unwrap(), vec![]).unwrap();
-    let handle = game.search(TimeControl::Infinite, None);
+    let handle = game.search(TimeControl::Infinite, None, None);
     let _ = log_search_info(handle.info_channel.1, &game.position);
 }
 
@@ -26,6 +27,7 @@ pub fn log_search_info(rcvr: Receiver<(SearchInfo, bool)>, pos: &Board) -> Searc
                 infra::SearchEval::Mate(dist) => "M".to_owned() + dist.to_string().as_str(),
             });
         }
+        std::io::stdout().lock().flush().unwrap();
         if is_final { return info; }
     }
     unreachable!();
@@ -65,7 +67,7 @@ fn epd_test(name: &str, epds: &str, time_control: TimeControl) {
 
     for epd in epd::parse_epd(epds.trim()) {
         let game = Game::new(epd.pos.clone(), vec![]).unwrap();
-        let handle = game.search(time_control, None);
+        let handle = game.search(time_control, None, None);
         let info = log_search_info(handle.info_channel.1, &epd.pos);
         let status = epd_bm_am_assessment(name, &epd, &info);
 
@@ -82,7 +84,7 @@ pub fn lct_ii_test() {
 }
 
 pub fn brantko_kopec_test() {
-    epd_test("Brantko-Kopec", BRANTKO_KOPEC, TimeControl::MoveTime(Duration::from_secs(30)));
+    epd_test("Brantko-Kopec", BRANTKO_KOPEC, TimeControl::MoveTime(Duration::from_secs(20)));
 }
 
 pub fn eigmann_rapid_test() {

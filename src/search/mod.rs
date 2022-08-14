@@ -1,7 +1,7 @@
 pub mod movegen;
 pub mod eval;
 pub mod time;
-pub mod ttab;
+pub mod htab;
 
 
 use std::{sync::{Arc, atomic::{AtomicBool, Ordering::SeqCst, AtomicI8, /* AtomicI16 */}, Mutex}, time::{Duration, Instant}};
@@ -9,17 +9,22 @@ use crossbeam_channel::Sender;
 use rayon::prelude::*;
 
 use crate::{Board, Move, PosHashMap, board::zobrist::PosHashNode, search::time::TimeManager};
-use ttab::{TransTable, TtData, SearchNode, ScoreKind};
+use htab::{SearchNode, ScoreKind};
 use eval::eval;
 use time::AllocatedTime;
 
+use self::htab::{TransTable, PkEvalTable};
 
 
-pub struct PersistantData(TransTable);
+
+pub struct PersistantData(TransTable, PkEvalTable);
 
 impl PersistantData {
     pub fn new() -> Self {
-        Self(TransTable::default()) // todo: make this customizable
+        Self(
+            TransTable::with_memory(htab::TRANS_MEM_DEFAULT),
+            PkEvalTable::with_memory(htab::PK_EVAL_MEM_DEFAULT),
+        )
     }
 }
 
@@ -34,8 +39,8 @@ pub enum SearchEval {
 impl SearchEval {
     fn from_search(score: i16) -> Self {
         match score {
-            s if s <=  eval::MATE+128 => SearchEval::Mate((-s-eval::MATE-1) as i8),
-            s if s >= -eval::MATE-128 => SearchEval::Mate((-s+eval::MATE  ) as i8),
+            s if s <=  eval::MATE+128 => SearchEval::Mate((-s+eval::MATE-1) as i8),
+            s if s >= -eval::MATE-128 => SearchEval::Mate((-s-eval::MATE  ) as i8),
             s => SearchEval::Normal(s),
         }
     }
@@ -95,6 +100,7 @@ pub fn search(
 
     allocated_time: AllocatedTime,
     trans_table: Arc<TransTable>,
+    pk_eval_table: Arc<PkEvalTable>,
 ) {
 
     // setup
@@ -147,7 +153,7 @@ pub fn search(
     let thread_pool = rayon::ThreadPoolBuilder::new().build().unwrap();
     loop {
         let draft = draft_arc.load(SeqCst);
-        //let alpha = Arc::new(AtomicI16::new(-i16::MAX + 200));
+        let alpha = Arc::new(std::sync::atomic::AtomicI16::new(-i16::MAX + 200));
 
         thread_pool.install(|| {
             old_srch_arc.lock().unwrap().clone().par_iter().for_each(|&(mov, _)| {
@@ -160,6 +166,7 @@ pub fn search(
                 let mut search_data = SearchData {
                     kill_switch: &kill_switch,
                     trans_table: &trans_table,
+                    pk_eval_table: &pk_eval_table,
                     pos_hash_map: &pos_hash_map,
 
                     node_count: 0,
@@ -170,9 +177,9 @@ pub fn search(
                 let mut board = board.clone();
                 board.make(mov);
                 
-                //let a = alpha.load(SeqCst);
+                let a = alpha.load(SeqCst);
                 let score = -pvs(&mut board, -i16::MAX, i16::MAX, draft, 0, &mut search_data, None);
-                //let score = -pvs(&mut board, -i16::MAX, -a + 150, draft, 0, &mut search_data, None);
+                //let score = -pvs(&mut board, -i16::MAX, -a + 100, draft, 0, &mut search_data, None);
                 if kill_switch.load(SeqCst) { return; }
 
                 let eval = SearchEval::from_search(score);
@@ -180,7 +187,7 @@ pub fn search(
                 let index = searches.binary_search_by(|(_, s)| eval.cmp(&s)).unwrap_or_else(|e| e);
                 searches.insert(index, (mov, eval));
 
-                //alpha.store(score, SeqCst);
+                alpha.store(score, SeqCst);
             });
         });
 
@@ -194,7 +201,8 @@ pub fn search(
         
         // send search info
         let depth = draft as usize + 1;
-        let info = SearchInfo { evals, depth, sel_depth: depth + 4 };
+        let sel_depth = depth + (-MAX_QUESCE_DRAFT) as usize;
+        let info = SearchInfo { evals, depth, sel_depth };
         let mut is_final = false;
 
         if let Some(man) = time_man.as_mut() {
@@ -215,10 +223,11 @@ pub fn search(
         if let Err(_) = info_sndr.send((info, false)) { return; }
         
         draft_arc.fetch_add(1, SeqCst);
-        *old_srch_arc.lock().unwrap() = std::mem::replace(
+        let nsa = std::mem::replace(
             new_srch_arc.lock().unwrap().as_mut(), 
             Vec::with_capacity(move_count),
         );
+        *old_srch_arc.lock().unwrap() = nsa;
 
         if kill_switch.load(SeqCst) { break; }
         if pv_send_lock.load(SeqCst) { break; }
@@ -240,9 +249,9 @@ fn watchdog(
             let search_time = Instant::now() - search_begin;
             let tgt_time = *tgt_time_arc.lock().unwrap();
 
-            if search_time < tgt_time {
+            if tgt_time > search_time + Duration::from_millis(100) {
                 std::thread::sleep(
-                    tgt_time - search_time - Duration::from_millis(1)
+                    tgt_time - search_time - Duration::from_millis(100)
                 );
             } else {
                 break;
@@ -269,7 +278,8 @@ fn watchdog(
         };
 
         // Send info. The channel may be disconnected, but it doesn't matter.
-        let _ = info_sndr.send((SearchInfo { evals, depth, sel_depth: depth + 4 }, true));
+        let sel_depth = depth + (-MAX_QUESCE_DRAFT) as usize;
+        let _ = info_sndr.send((SearchInfo { evals, depth, sel_depth }, true));
     });
 }
 
@@ -277,6 +287,7 @@ fn watchdog(
 pub struct SearchData<'a> {
     pub kill_switch: &'a AtomicBool,
     pub trans_table: &'a TransTable,
+    pub pk_eval_table: &'a PkEvalTable,
     pub pos_hash_map: &'a PosHashMap,
 
     pub node_count: usize,
@@ -285,7 +296,7 @@ pub struct SearchData<'a> {
 }
 
 fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mut SearchData, prev_phn: Option<&PosHashNode>) -> i16 {
-    if draft == 0 { return quesce(board, alpha, beta, 0, depth) ; }
+    if draft == 0 { return quesce(board, alpha, beta, 0, depth, data) ; }
     if draft >= 4 && data.kill_switch.load(SeqCst) { return -i16::MAX; }
 
     let og_alpha = alpha;
@@ -294,8 +305,7 @@ fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mu
     let mut pv = Option::<Move>::None;
     if let Some(search_node) = data.trans_table.get(board.hash) {
         match search_node {
-            SearchNode::Normal { score_kind: kind, data: TtData { score: sn_score, draft: sn_draft, pv: sn_pv } } => {
-                let score = sn_score + depth as i16;
+            SearchNode::Score { score_kind: kind, score, draft: sn_draft, pv: sn_pv } => {
                 if sn_draft >= draft {
                     // search is deeper, hence is sufficient to be decisive
                     match kind {
@@ -334,41 +344,37 @@ fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mu
         }
     }
 
-
-    let mut max = -i16::MAX;
-    let mut best_move = None;
+    let mut best: Option<(i16, Move)> = None;
     let mut move_count = 0;
-    let mut legal_move_exists = false;
     let thing = |mov: Move, board: &Board, data: &mut SearchData| -> bool {
-        //if !board.is_valid(mov) { panic!("{:?}\n{}\n\n", mov, board.to_fen()); }
-
-        legal_move_exists = true;
         move_count += 1;
         if draft > 3 && move_count == 6 /* && !check_ext */ && !is_actv_in_check { depth_reduct += 1; }
 
         let mut b = board.clone();
         b.make(mov);
-        //if let Err(e) = b.validate() { panic!("{}\n{:?}\n{}\n{}\n\n", e, mov, board.to_fen(), b.to_fen()); }
+        //if let Err(e) = b.validate() { panic!("{}\n{:?}\n{}\n{}\n\n", e, mov, board.to_fen(true), b.to_fen(true)); }
         
-        let mut score = -i16::MAX;
+        let mut score;
         if is_pos_draw(&b, data.pos_hash_map, prev_phn) {
             score = eval::DRAW;
         } else {
             // else continue search
             let phn = PosHashNode::new(b.hash, prev_phn);
-            if max != -i16::MAX {
-                score = -pvs(&mut b, -i16::MAX/* -alpha-1 */, -alpha, draft - depth_reduct, depth + 1, data, Some(&phn));
-            }
-            if score >= alpha && score < beta || max == -i16::MAX {
+
+            if best.is_none() {
                 score = -pvs(&mut b, -beta, -alpha, draft - 1, depth + 1, data, Some(&phn));
+            } else {
+                score = -pvs(&mut b, /* -i16::MAX */-alpha-1, -alpha, draft - depth_reduct, depth + 1, data, Some(&phn));
+                if score >= alpha && score < beta {
+                    score = -pvs(&mut b, -beta, -alpha, draft - 1, depth + 1, data, Some(&phn));
+                }
             }
         }
         
-        if score >= max {
-            max = score;
-            best_move = Some(mov);
-            if max > alpha { alpha = max; }
-            if max >= beta {
+        if best.map_or(true, |b| b.0 <= score) {
+            best = Some((score, mov));
+            if score > alpha { alpha = score; }
+            if score >= beta {
                 // update history heuristic
                 /* let weight = draft as u16 * draft as u16;
                 data.history[mov.piece as usize][mov.to_sq as usize] += weight; */
@@ -380,7 +386,6 @@ fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mu
 
         false
     };
-
     
     if draft > 2 {
         movegen::gen(thing, board, depth, data, pv);
@@ -394,54 +399,57 @@ fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mu
     /* if check_ext { data.check_exts -= 1; } */
 
     // update ttab
-    if !legal_move_exists { // no legal moves - mate
-        if !board.is_actv_in_check() {
-            max = eval::DRAW;
-            data.trans_table.insert(board.hash, SearchNode::Stalemate, |_| true);
-        } else {
-            max = eval::MATE + depth as i16;
-            data.trans_table.insert(board.hash, SearchNode::Checkmate, |_| true);
-        }
-    } else { // normal search
-        let best_move = best_move.unwrap();
+    if let Some((score, pv)) = best { 
         // update killer move
         let (k1, k2) = data.killers.get_mut(depth as usize).unwrap();
         match k1 {
-            Some(k1v) if *k1v == best_move => (),
-            _ => { *k2 = *k1; *k1 = Some(best_move); },
+            Some(k1v) if *k1v == pv => (),
+            _ => { *k2 = *k1; *k1 = Some(pv); },
         }
         /* // update counter move
         data.counters[prev_move.piece as usize][prev_move.to_sq as usize] = Some(best_move); */
         
-        let kind;
-        if max <= og_alpha { kind = ttab::ScoreKind::LoBound; }
-        else if max < beta { kind = ttab::ScoreKind::Exact; }
-        else { kind = ttab::ScoreKind::HiBound; }
-
-        let tt_node = SearchNode::Normal {
-            score_kind: kind,
-            data: TtData { score: max - depth as i16, draft, pv: best_move }
+        let score_kind = match score {
+            score if score <= og_alpha => ScoreKind::LoBound,
+            score if score < beta => ScoreKind::Exact,
+            _ => ScoreKind::HiBound,
+        };
+        let tt_node = SearchNode::Score {
+            score_kind,
+            score,
+            draft,
+            pv,
         };
         data.trans_table.insert(board.hash, tt_node, |old| {
-            if let SearchNode::Normal { score_kind: _, data: TtData { draft: old_draft, score: _, pv: _ } } = old {
+            if let SearchNode::Score { draft: old_draft, .. } = old {
                 *old_draft <= draft // update if draft is at least as good
             } else {
                 true // always-replace policy for mates
             }
         });
+
+        score
+    } else { // no legal moves - mate
+        if !board.is_actv_in_check() {
+            data.trans_table.insert(board.hash, SearchNode::Stalemate, |_| true);
+            eval::DRAW
+        } else {
+            data.trans_table.insert(board.hash, SearchNode::Checkmate, |_| true);
+            eval::MATE + depth as i16
+        }
     }
-    
-    max
 }
 
-fn quesce(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8) -> i16 {
-    if draft <= -4 { return eval(board); }
+const MAX_QUESCE_DRAFT: i8 = -3;
+
+fn quesce(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mut SearchData) -> i16 {
+    if draft <= MAX_QUESCE_DRAFT { return eval(board, data.pk_eval_table); }
 
     let is_actv_in_check = board.is_actv_in_check();
     let mut max = -i16::MAX;
 
     if !is_actv_in_check { // no stand pat in check
-        max = eval(board); // stand pat
+        max = eval(board, data.pk_eval_table); // stand pat
         if max >= beta { return max; }
         if max > alpha { alpha = max; }
     }
@@ -452,7 +460,7 @@ fn quesce(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8) -> i16
 
         let mut board = board.clone();
         board.make(mov);
-        let score = -quesce(&board, -beta, -alpha, draft - 1, depth + 1);
+        let score = -quesce(&board, -beta, -alpha, draft - 1, depth + 1, data);
 
         if score > max {
             max = score;
@@ -465,9 +473,9 @@ fn quesce(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8) -> i16
 
     if quiet_position {
         if is_actv_in_check {
-            eval::MATE + depth as i16
+            eval::UNCERTAIN_MATE + depth as i16
         } else {
-            eval(board)
+            eval(board, data.pk_eval_table)
         }
     } else {
         max

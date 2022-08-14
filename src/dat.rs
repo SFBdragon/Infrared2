@@ -33,6 +33,7 @@ impl Not for Side {
 /// A square on a chess board.
 /// Represented as a zero-based byte index into `a1, a2, ... , b1, b2, ... , h8`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
 pub struct Sq(u8);
 impl Sq {
     pub const A1: Sq = Sq(0o00); pub const B1: Sq = Sq(0o01); 
@@ -83,6 +84,8 @@ impl Sq {
     }
     
 
+    /// Get the underlying `u8`, returns `0..=63`.
+    pub const fn u8(self) -> u8 { self.0 }
     /// Get the underlying `u8` representation as `usize`, returns `0..=63`.
     pub const fn us(self) -> usize { self.0 as usize }
     /// Get the rank, returns `0..=7`.
