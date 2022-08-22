@@ -242,18 +242,23 @@ pub type TransTable = HashTable<SearchNode>;
 pub const TRANS_MEM_DEFAULT: usize = 1024 * 1024 * 256;
 
 pub struct PawnKingEval {
-    pub eval: f32,
+    pub eval: i16,
 }
 
 impl HashTableData for PawnKingEval {
     fn from_u64(data: u64) -> Self {
+        let bytes = data.to_le_bytes();
         Self {
-            eval: f32::from_bits(data as u32)
+            eval: i16::from_le_bytes([bytes[0], bytes[1]]),
         }
     }
 
     fn to_u64(self) -> u64 {
-        self.eval.to_bits() as u64
+        let mut bytes = [0u8; 8];
+        let data = self.eval.to_le_bytes();
+        bytes[0] = data[0];
+        bytes[1] = data[1];
+        u64::from_le_bytes(bytes)
     }
 }
 

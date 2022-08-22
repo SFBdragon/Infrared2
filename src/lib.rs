@@ -1,4 +1,4 @@
-pub mod dat;
+pub mod game;
 pub mod parse;
 pub mod board;
 pub mod epd;
@@ -6,15 +6,13 @@ pub mod search;
 pub mod opening;
 pub mod syzygy;
 
-use std::{sync::{Arc, atomic::AtomicBool}, thread::JoinHandle};
 
-pub use dat::*;
 pub use board::Board;
-use search::htab::{TransTable, self, PkEvalTable};
+pub use game::{Game, SearchHandle};
 pub use search::{SearchInfo, SearchEval, time::TimeControl};
 
-use crossbeam_channel::{Sender, Receiver};
-use board::zobrist::{PosHashMap, U64IdentHashBuilder};
+use std::{fmt::Debug, ops::Not};
+use board::zobrist::PosHashMap;
 
 
 /// Evaluates a boolean expression:
@@ -37,145 +35,233 @@ macro_rules! as_result {
 
 
 
-#[derive(Debug, Clone)]
-pub struct Game {
-    /// Game beginning position.
-    pub begin_pos: Board,
-    /// Current position.
-    pub position: Board,
-    /// Moves between `startpos` and `position`.
-    pub move_list: Vec<Move>,
-    /// Position hashes between `startpos` and `position`.
-    pub prev_hashes: PosHashMap,
-    /// Current distance from last book move, if known.
-    pub book_distance: Option<usize>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Side {
+    White = 1,
+    Black = 0,
+}
+impl Side {
+    pub fn is_white(self) -> bool {
+        self == Self::White
+    }
+    pub fn is_black(self) -> bool {
+        self == Self::Black
+    }
+    pub fn flip(self) -> Self {
+        match self {
+            Side::White => Side::Black,
+            Side::Black => Side::White,
+        }
+    }
+}
+impl Not for Side {
+    type Output = Side;
+
+    fn not(self) -> Self::Output {
+        self.flip()
+    }
 }
 
-impl Game {
-    fn update_hash_data(book_dist: &mut Option<usize>, prev_hashes: &mut PosHashMap, hash: u64) {
-        // Track book distance
-        if opening::query_book(hash).is_some() {
-            *book_dist = Some(0);
-        } else if let Some(dist) = *book_dist {
-            *book_dist = Some(dist + 1);
-        }
 
-        // Add position hash
-        prev_hashes.entry(hash).and_modify(|c| *c += 1).or_insert(0);
+/// A square on a chess board.
+/// Represented as a zero-based byte index into `a1, a2, ... , b1, b2, ... , h8`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
+pub struct Sq(u8);
+impl Sq {
+    pub const A1: Sq = Sq(0o00); pub const B1: Sq = Sq(0o01); 
+    pub const C1: Sq = Sq(0o02); pub const D1: Sq = Sq(0o03); 
+    pub const E1: Sq = Sq(0o04); pub const F1: Sq = Sq(0o05); 
+    pub const G1: Sq = Sq(0o06); pub const H1: Sq = Sq(0o07); 
+    pub const A2: Sq = Sq(0o10); pub const B2: Sq = Sq(0o11); 
+    pub const C2: Sq = Sq(0o12); pub const D2: Sq = Sq(0o13); 
+    pub const E2: Sq = Sq(0o14); pub const F2: Sq = Sq(0o15); 
+    pub const G2: Sq = Sq(0o16); pub const H2: Sq = Sq(0o17); 
+    pub const A3: Sq = Sq(0o20); pub const B3: Sq = Sq(0o21); 
+    pub const C3: Sq = Sq(0o22); pub const D3: Sq = Sq(0o23); 
+    pub const E3: Sq = Sq(0o24); pub const F3: Sq = Sq(0o25); 
+    pub const G3: Sq = Sq(0o26); pub const H3: Sq = Sq(0o27); 
+    pub const A4: Sq = Sq(0o30); pub const B4: Sq = Sq(0o31); 
+    pub const C4: Sq = Sq(0o32); pub const D4: Sq = Sq(0o33); 
+    pub const E4: Sq = Sq(0o34); pub const F4: Sq = Sq(0o35); 
+    pub const G4: Sq = Sq(0o36); pub const H4: Sq = Sq(0o37); 
+    pub const A5: Sq = Sq(0o40); pub const B5: Sq = Sq(0o41); 
+    pub const C5: Sq = Sq(0o42); pub const D5: Sq = Sq(0o43); 
+    pub const E5: Sq = Sq(0o44); pub const F5: Sq = Sq(0o45); 
+    pub const G5: Sq = Sq(0o46); pub const H5: Sq = Sq(0o47); 
+    pub const A6: Sq = Sq(0o50); pub const B6: Sq = Sq(0o51); 
+    pub const C6: Sq = Sq(0o52); pub const D6: Sq = Sq(0o53); 
+    pub const E6: Sq = Sq(0o54); pub const F6: Sq = Sq(0o55); 
+    pub const G6: Sq = Sq(0o56); pub const H6: Sq = Sq(0o57); 
+    pub const A7: Sq = Sq(0o60); pub const B7: Sq = Sq(0o61); 
+    pub const C7: Sq = Sq(0o62); pub const D7: Sq = Sq(0o63); 
+    pub const E7: Sq = Sq(0o64); pub const F7: Sq = Sq(0o65); 
+    pub const G7: Sq = Sq(0o66); pub const H7: Sq = Sq(0o67); 
+    pub const A8: Sq = Sq(0o70); pub const B8: Sq = Sq(0o71); 
+    pub const C8: Sq = Sq(0o72); pub const D8: Sq = Sq(0o73); 
+    pub const E8: Sq = Sq(0o74); pub const F8: Sq = Sq(0o75); 
+    pub const G8: Sq = Sq(0o76); pub const H8: Sq = Sq(0o77);
+
+
+    pub const fn new(i: u8) -> Self {
+        assert!(i < 64);
+        Self(i)
     }
-
-    /// Create a chess game!
-    /// 
-    /// Returns `Err` variant when a move is invalid, returning the relevant position and move.
-    pub fn new(begin_pos: Board, move_list: Vec<Move>) -> Result<Self, (Board, Move)> {
-        Self::with_coded(begin_pos, move_list, |m, _| *m)
+    pub const fn file_rank(file: u8, rank: u8) -> Self {
+        assert!(file < 8 && rank < 8);
+        Self(file + rank * 8)
+    }
+    /// `Sq` from a bitmap's lowest set bit.
+    pub const fn lsb(bm: u64) -> Self {
+        Self(bm.trailing_zeros() as u8)
     }
     
-    /// Create a chess game, given another move coding.
-    /// 
-    /// Returns `Err` variant when a move is invalid, returning the relevant position and move.
-    pub fn with_coded<T, F>(begin_pos: Board, move_list: Vec<T>, mut f: F) -> Result<Self, (Board, Move)>
-    where F: FnMut(&T, &Board) -> Move {
-        let mut position = begin_pos.clone();
-        let mut prev_hashes = PosHashMap::with_hasher(U64IdentHashBuilder);
-        let mut book_distance = None;
-        let mut decoded_move_list = Vec::with_capacity(move_list.len());
 
-        for i in 0..=move_list.len() {
-            Self::update_hash_data(&mut book_distance, &mut prev_hashes, position.hash);
+    /// Get the underlying `u8`, returns `0..=63`.
+    pub const fn u8(self) -> u8 { self.0 }
+    /// Get the underlying `u8` representation as `usize`, returns `0..=63`.
+    pub const fn us(self) -> usize { self.0 as usize }
+    /// Get the rank, returns `0..=7`.
+    pub const fn rank(self) -> u8 { self.0 / 8 }
+    /// Get the file, returns `0..=7`.
+    pub const fn file(self) -> u8 { self.0 % 8 }
+    
+    /// Get a bitmask with the corresponding bit set.
+    pub const fn bm(self) -> u64 { 1u64 << self.0 }
 
-            if i == move_list.len() { break; }
+    /// Mirror the rank.
+    pub const fn flip(self) -> Self { Self(self.0 ^ 0o70) }
 
-            // Make move
-            let mov = f(&move_list[i], &position);
-            decoded_move_list.push(mov);
-
-            if position.is_valid(mov) {
-                position.make(mov);
-            } else {
-                return Err((position, mov));
-            }
+    /// Flips the rank if `side == Side::Black`.
+    /// Converts between Infrared and standard Chess square encoding.
+    pub const fn cflip(self, side: Side) -> Self {
+        match side {
+            Side::White => self,
+            Side::Black => self.flip(),
         }
-
-        position.validate().unwrap();
-
-        Ok(Self {
-            begin_pos,
-            position,
-            move_list: decoded_move_list,
-            prev_hashes,
-            book_distance,
-        })
     }
-
-    /// Play a move.
-    pub fn play(&mut self, mov: Move) -> Result<Option<GameOver>, ()> {
-        // Ensure move validity
-        if !self.position.is_valid(mov) { return Err(()) }
-
-        self.position.make(mov);
-        self.move_list.push(mov);
-        Self::update_hash_data(
-            &mut self.book_distance, 
-            &mut self.prev_hashes, 
-            self.position.hash
-        );
-
-        // Return gameover status
-        Ok(self.is_game_over())
+}
+impl Debug for Sq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Sq").field(&format_args!("{:#o}", self.0)).finish()
     }
-
-    /// Get a list of legal moves.
-    pub fn get_moves(&self) -> Vec<Move> {
-        let mut moves = Vec::new();
-        self.position.for_mov(|mov| { moves.push(mov); false });
-        moves
+}
+impl Into<u8> for Sq {
+    fn into(self) -> u8 {
+        self.0
     }
+}
+impl TryFrom<u8> for Sq {
+    type Error = ();
 
-    /// Check if the game is over.
-    pub fn is_game_over(&self) -> Option<GameOver> {
-        self.position.is_game_over().or_else(|| 
-            board::zobrist::threefold_repetition(&self.prev_hashes, self.position.hash)
-                .then_some(GameOver::ThreefoldRepetition)
-        )
-    }
-
-
-    pub fn search(&self,
-        time_control: TimeControl, 
-        trans_table: Option<Arc<TransTable>>,
-        pk_eval_table: Option<Arc<PkEvalTable>>,
-    ) -> SearchHandle {
-        let kill_switch = Arc::new(AtomicBool::new(false));
-        let (sndr, rcvr) = crossbeam_channel::unbounded();
-
-        let thread_game = self.clone();
-        let thread_kill_switch = kill_switch.clone();
-        let thread_sndr = sndr.clone();
-
-        let thread_handle = std::thread::spawn(move || {
-            search::search(
-                thread_game.position,
-                thread_game.prev_hashes,
-                thread_game.move_list.last().map(|&m| m),
-                thread_sndr,
-                thread_kill_switch,
-                time_control.allocate_time(thread_game.book_distance),
-                trans_table.unwrap_or(Arc::new(TransTable::with_memory(htab::TRANS_MEM_DEFAULT))),
-                pk_eval_table.unwrap_or(Arc::new(PkEvalTable::with_memory(htab::PK_EVAL_MEM_DEFAULT))),
-            )
-        });
-
-        SearchHandle { info_channel: (sndr, rcvr), kill_switch, thread_handle }
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value > 64 { return Err(()); }
+        Ok(Sq::new(value))
     }
 }
 
-#[derive(Debug)]
-pub struct SearchHandle {
-    /// Channel through which search data is sent.
-    pub info_channel: (Sender<(SearchInfo, bool)>, Receiver<(SearchInfo, bool)>),
-    /// Set the switch to kill the engine at any time (do not clear).
-    pub kill_switch: Arc<AtomicBool>,
-    /// Handle to the engine thread.
-    pub thread_handle: JoinHandle<()>,
+/// Loop through the square of each set bit from least to most significant.
+#[macro_export]
+macro_rules! for_sq {
+    ($sq:ident in $bb:expr => $blk:expr) => {
+        let mut t = $bb;
+        while t != 0 {
+            let $sq = Sq::lsb(t);
+            t &= t - 1;
+            $blk
+        }
+    };
 }
+
+
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Move {
+    pub from: Sq,
+    pub to: Sq,
+    /// The moved piece identity, or otherwise promotion piece.
+    pub piece: Piece,
+}
+impl Move {
+    pub const KS_CASTLE: Move = Move::new(Sq::E1, Sq::G1, Piece::King);
+    pub const QS_CASTLE: Move = Move::new(Sq::E1, Sq::C1, Piece::King);
+
+    pub const fn new(from: Sq, to: Sq, piece: Piece) -> Self {
+        Self { from, to, piece }
+    }
+
+    pub const fn cflip(self, side: Side) -> Move {
+        Move::new(self.from.cflip(side), self.to.cflip(side), self.piece)
+    }
+}
+
+pub const KING: u8 = 0;
+pub const QUEEN: u8 = 1;
+pub const ROOK: u8 = 2;
+pub const BISHOP: u8 = 3;
+pub const KNIGHT: u8 = 4;
+pub const PAWN: u8 = 5;
+
+pub const KING_IDX: usize = KING as usize;
+pub const QUEEN_IDX: usize = QUEEN as usize;
+pub const ROOK_IDX: usize = ROOK as usize;
+pub const BISHOP_IDX: usize = BISHOP as usize;
+pub const KNIGHT_IDX: usize = KNIGHT as usize;
+pub const PAWN_IDX: usize = PAWN as usize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Piece {
+    King = KING,
+    Queen = QUEEN,
+    Rook = ROOK,
+    Bishop = BISHOP,
+    Knight = KNIGHT,
+    Pawn = PAWN,
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameOver {
+    Checkmate,
+    Stalemate,
+    ThreefoldRepetition,
+    FiftyMoveRule,
+    InsufficientMaterial,
+}
+
+
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct CastleRights(u8);
+impl CastleRights {
+    const KINGSIDE: u8 = 1 << 0;
+    const QUEENSIDE: u8 = 1 << 1;
+
+    pub const fn new(kingside: bool, queenside: bool) -> Self {
+        Self(Self::KINGSIDE * kingside as u8 | Self::QUEENSIDE * queenside as u8)
+    }
+
+    /// Check if kingside castling is allowable.
+    pub const fn kingside(self) -> bool { self.0 & Self::KINGSIDE != 0 }
+    /// Check if queenside castling is allowable.
+    pub const fn queenside(self) -> bool { self.0 & Self::QUEENSIDE != 0 }
+    /// Check if either side castling is allowable.
+    pub const fn any(self) -> bool { self.0 != 0 }
+    
+    /// Void the right to kingside castle.
+    pub fn void_kingside(&mut self) { self.0 &= !Self::KINGSIDE; }
+    /// Void the right to queenside castle.
+    pub fn void_queenside(&mut self) { self.0 &= !Self::QUEENSIDE; }
+}
+impl Debug for CastleRights {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CastleRights")
+            .field("kingside", &self.kingside())
+            .field("queenside", &self.queenside())
+            .finish()
+    }
+}
+

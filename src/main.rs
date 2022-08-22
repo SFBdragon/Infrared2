@@ -3,17 +3,27 @@ mod tests;
 
 fn main() {
     // handle/config args
-    for arg in std::env::args() {
-        match arg.to_lowercase().as_str() {
-            "testpos" => { tests::test_pos(); return; },
-            "lctii" => { tests::lct_ii_test(); return; },
-            "brantko" => { tests::brantko_kopec_test(); return; },
-            "eigmann" => { tests::eigmann_rapid_test(); return; },
-            "silent" => { tests::silent_but_deadly_test(); return; },
-            _ => (),
+    if let Some(arg) = std::env::args().nth(1) {
+        if arg == "epd" {
+            if let Some(path) = std::env::args().nth(2) {
+                let path = std::path::Path::new(path.as_str());
+                assert!(path.exists(), "File at this path does not exist!");
+                if let Some(secs) = std::env::args().nth(3) {
+                    let secs = secs.parse::<f32>().expect("Invalid time in seconds");
+                    let time = std::time::Duration::from_secs_f32(secs);
+                    tests::epd_test_from_file(path, time);
+                    return;
+                }
+            }
+            println!("Invalid epd command.");
+            println!("infra[EXE] epd <filepath> <seconds per search>");
+        } else {
+            println!("Unknown arg(s)!");
+            println!("Available args: ");
+            println!("infra[EXE] epd <filepath> <seconds per search>");
         }
+    } else {
+        // Run UCI Engine!
+        uci::uci();
     }
-    
-    // Run UCI Engine!
-    uci::uci();
 }

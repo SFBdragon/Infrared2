@@ -4,7 +4,7 @@ pub mod time;
 pub mod htab;
 
 
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering::SeqCst, AtomicI8, /* AtomicI16 */}, Mutex}, time::{Duration, Instant}};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering::SeqCst, AtomicI8}, Mutex}, time::{Duration, Instant}};
 use crossbeam_channel::Sender;
 use rayon::prelude::*;
 
@@ -105,20 +105,20 @@ pub fn search(
 
     // setup
 
-    let old_srch_arc = Arc::new(Mutex::new(Vec::new()));
+    let draft_arc = Arc::new(AtomicI8::new(2));
+
+    let evals_arc;
     let mut move_count = 0;
     {
-        let mut moves_guard = old_srch_arc.lock().unwrap();
+        let mut root_moves = Vec::new();
         board.for_mov(|mov| {
-            moves_guard.push((mov, SearchEval::Normal(0)));
+            root_moves.push((mov, SearchEval::Normal(0)));
             move_count += 1;
             false
         });
         assert_ne!(move_count, 0);
+        evals_arc = Arc::new(Mutex::new((root_moves, Vec::with_capacity(move_count))));
     }
-    
-    let new_srch_arc = Arc::new(Mutex::new(Vec::with_capacity(move_count)));
-    let draft_arc = Arc::new(AtomicI8::new(2));
 
     
     // set up time management systems
@@ -142,8 +142,7 @@ pub fn search(
             kill_switch.clone(), 
             pv_send_lock.clone(),
             tgt_time_arc.clone(), 
-            old_srch_arc.clone(), 
-            new_srch_arc.clone(), 
+            evals_arc.clone(), 
             draft_arc.clone(),
         );
     }
@@ -156,7 +155,8 @@ pub fn search(
         let alpha = Arc::new(std::sync::atomic::AtomicI16::new(-i16::MAX + 200));
 
         thread_pool.install(|| {
-            old_srch_arc.lock().unwrap().clone().par_iter().for_each(|&(mov, _)| {
+            let moves = evals_arc.lock().unwrap().0.clone();
+            moves.par_iter().for_each(|&(mov, _)| {
                 if kill_switch.load(SeqCst) { return; }
 
                 let trans_table = trans_table.clone();
@@ -177,32 +177,44 @@ pub fn search(
                 let mut board = board.clone();
                 board.make(mov);
                 
-                let a = alpha.load(SeqCst);
+                //let a = alpha.load(SeqCst);
                 let score = -pvs(&mut board, -i16::MAX, i16::MAX, draft, 0, &mut search_data, None);
-                //let score = -pvs(&mut board, -i16::MAX, -a + 100, draft, 0, &mut search_data, None);
+                //let score = -pvs(&mut board, -i16::MAX, -a /* + 100 */, draft, 0, &mut search_data, None);
                 if kill_switch.load(SeqCst) { return; }
 
+                // replace with is_pv_searched atomicbool
+                // and a mutex<pv/eval>
                 let eval = SearchEval::from_search(score);
-                let mut searches = new_srch_arc.lock().unwrap();
-                let index = searches.binary_search_by(|(_, s)| eval.cmp(&s)).unwrap_or_else(|e| e);
-                searches.insert(index, (mov, eval));
+                let mut searches = evals_arc.lock().unwrap();
+                let index = searches.1.binary_search_by(|(_, s)| eval.cmp(&s)).map_or_else(|e| e, |index| {
+                    index
+                    /* let eval = searches[index].1;
+                    searches[index..].iter().enumerate()
+                        .skip_while(|(_, (_, s))| *s == eval)
+                        .next().map_or(searches.len(), |s| s.0) */
+                });
+                searches.1.insert(index, (mov, eval));
 
                 alpha.store(score, SeqCst);
             });
         });
 
+        let mut evals_guard = evals_arc.lock().unwrap();
+        let prev_evals = &evals_guard.0;
+        let curr_evals = &evals_guard.1;
+
         // use old searches if pv is not re-searched (occurs upon early search kill)
-        let old_pv = old_srch_arc.lock().unwrap().first().unwrap().0;
-        let is_pv_searched = new_srch_arc.lock().unwrap().iter().any(|&(m, _)| m == old_pv);
-        let evals = match kill_switch.load(SeqCst) && !is_pv_searched {
-            true =>  old_srch_arc.lock().unwrap().clone(),
-            false => new_srch_arc.lock().unwrap().clone(),
+        let old_pv = prev_evals.first().unwrap().0;
+        let is_pv_searched = curr_evals.iter().any(|&(m, _)| m == old_pv);
+        let evals = match kill_switch.load(SeqCst) || !is_pv_searched {
+            true =>  prev_evals,
+            false => curr_evals,
         };
         
         // send search info
         let depth = draft as usize + 1;
         let sel_depth = depth + (-MAX_QUESCE_DRAFT) as usize;
-        let info = SearchInfo { evals, depth, sel_depth };
+        let info = SearchInfo { evals: evals.clone(), depth, sel_depth };
         let mut is_final = false;
 
         if let Some(man) = time_man.as_mut() {
@@ -222,15 +234,12 @@ pub fn search(
 
         if let Err(_) = info_sndr.send((info, false)) { return; }
         
-        draft_arc.fetch_add(1, SeqCst);
-        let nsa = std::mem::replace(
-            new_srch_arc.lock().unwrap().as_mut(), 
-            Vec::with_capacity(move_count),
-        );
-        *old_srch_arc.lock().unwrap() = nsa;
-
         if kill_switch.load(SeqCst) { break; }
         if pv_send_lock.load(SeqCst) { break; }
+        
+        draft_arc.fetch_add(1, SeqCst);
+        let (_, curr) = std::mem::take(&mut*evals_guard);
+        *evals_guard = (curr, Vec::with_capacity(move_count));
     }
 }
 
@@ -239,8 +248,7 @@ fn watchdog(
     kill_switch: Arc<AtomicBool>,
     pv_send_lock: Arc<AtomicBool>,
     tgt_time_arc: Arc<Mutex<Duration>>,
-    old_srch_arc: Arc<Mutex<Vec<(Move, SearchEval)>>>, 
-    new_srch_arc: Arc<Mutex<Vec<(Move, SearchEval)>>>,
+    evals_arc: Arc<Mutex<(Vec<(Move, SearchEval)>, Vec<(Move, SearchEval)>)>>, 
     draft_arc: Arc<AtomicI8>,
 ) {
     let search_begin = Instant::now();
@@ -266,15 +274,14 @@ fn watchdog(
         kill_switch.store(true, SeqCst);
         
         // determine if most recent depth's search has searched the pv
-        let old_searches = old_srch_arc.lock().unwrap();
-        let old_pv = old_searches[0].0;
-        let new_searches = new_srch_arc.lock().unwrap();
+        let evals_guard = evals_arc.lock().unwrap();
+        let old_pv = evals_guard.0[0].0;
 
         // determine pv data
         let depth = draft_arc.load(SeqCst) as usize + 1;
-        let evals = match new_searches.iter().any(|&(m, _)| m == old_pv) {
-            true => new_searches.clone(),
-            false => old_searches.clone(),
+        let evals = match evals_guard.1.iter().any(|&(m, _)| m == old_pv) {
+            true => evals_guard.1.clone(),
+            false => evals_guard.0.clone(),
         };
 
         // Send info. The channel may be disconnected, but it doesn't matter.
@@ -364,8 +371,9 @@ fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mu
             if best.is_none() {
                 score = -pvs(&mut b, -beta, -alpha, draft - 1, depth + 1, data, Some(&phn));
             } else {
-                score = -pvs(&mut b, /* -i16::MAX */-alpha-1, -alpha, draft - depth_reduct, depth + 1, data, Some(&phn));
-                if score >= alpha && score < beta {
+                score = -pvs(&mut b, -beta/* -alpha-1 */, -alpha, draft - depth_reduct, depth + 1, data, Some(&phn));
+                if depth_reduct > 1 && score >= alpha && score < beta {
+                    // test: reset depth reduct?
                     score = -pvs(&mut b, -beta, -alpha, draft - 1, depth + 1, data, Some(&phn));
                 }
             }
