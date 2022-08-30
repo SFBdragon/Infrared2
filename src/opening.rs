@@ -41,7 +41,7 @@ pub static BOOK: Lazy<Vec<OpeningEntry>> = Lazy::new(|| {
         vec.push(OpeningEntry {
             hash: u64::from_le_bytes(hash_buf),
             freq: u32::from_le_bytes(freq_buf),
-            mov: Move::new(Sq::new(buf[12]), Sq::new(buf[13]), piece.unwrap()),
+            mv: Move::new(Sq::new(buf[12]), Sq::new(buf[13]), piece.unwrap()),
         });
     }
 
@@ -55,7 +55,7 @@ pub struct OpeningEntry {
     /// Relative frequency of play.
     pub freq: u32,
     /// Move to play at this position.
-    pub mov: Move,
+    pub mv: Move,
 }
 
 
@@ -75,7 +75,7 @@ pub fn query_book(hash: u64) -> Option<&'static [OpeningEntry]> {
 }
 
 pub fn query_book_best(hash: u64) -> Option<Move> {
-    query_book(hash).map(|q| q.iter().max_by_key(|e| e.freq).unwrap().mov)
+    query_book(hash).map(|q| q.iter().max_by_key(|e| e.freq).unwrap().mv)
 }
 
 

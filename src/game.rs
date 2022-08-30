@@ -62,13 +62,13 @@ impl Game {
             if i == move_list.len() { break; }
 
             // Make move
-            let mov = f(&move_list[i], &position);
-            decoded_move_list.push(mov);
+            let mv = f(&move_list[i], &position);
+            decoded_move_list.push(mv);
 
-            if position.is_valid(mov) {
-                position.make(mov);
+            if position.is_valid(mv) {
+                position.make(mv);
             } else {
-                return Err((position, mov));
+                return Err((position, mv));
             }
         }
 
@@ -84,12 +84,12 @@ impl Game {
     }
 
     /// Play a move.
-    pub fn play(&mut self, mov: Move) -> Result<Option<GameOver>, ()> {
+    pub fn play(&mut self, mv: Move) -> Result<Option<GameOver>, ()> {
         // Ensure move validity
-        if !self.position.is_valid(mov) { return Err(()) }
+        if !self.position.is_valid(mv) { return Err(()) }
 
-        self.position.make(mov);
-        self.move_list.push(mov);
+        self.position.make(mv);
+        self.move_list.push(mv);
         Self::update_hash_data(
             &mut self.book_distance, 
             &mut self.prev_hashes, 
@@ -103,7 +103,7 @@ impl Game {
     /// Get a list of legal moves.
     pub fn get_moves(&self) -> Vec<Move> {
         let mut moves = Vec::new();
-        self.position.for_mov(|mov| { moves.push(mov); false });
+        self.position.for_move(|mv| { moves.push(mv); false });
         moves
     }
 
@@ -149,8 +149,12 @@ impl Game {
 pub struct SearchHandle {
     /// Channel through which search data is sent.
     pub info_channel: (Sender<(SearchInfo, bool)>, Receiver<(SearchInfo, bool)>),
+
     /// Set the switch to kill the engine at any time (do not clear).
+    /// 
+    /// Note that killing will trigger a final evaluation to be emitted soon after.
     pub kill_switch: Arc<AtomicBool>,
+    
     /// Handle to the engine thread.
     pub thread_handle: JoinHandle<()>,
 }

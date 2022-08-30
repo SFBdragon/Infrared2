@@ -2,7 +2,7 @@
 
 use std::{cmp, time::{Instant, Duration}};
 
-use crate::{Move, Sq};
+use crate::Move;
 
 use super::{SearchInfo, SearchEval};
 
@@ -92,8 +92,8 @@ pub enum AllocatedTime {
 }
 
 
-/// Minimum search time fraction before time-cutoffs are considered.
-const MIN_SEARCH: f64 = 0.125;
+///// Minimum search time fraction before time-cutoffs are considered.
+//const MIN_SEARCH: f64 = 0.125;
 /// Maximum search time fraction after which time is cut off or extended.
 const MAX_SEARCH: f64 = 0.5;
 /// Search time cutoff for re-assess as ratio of allocated time.
@@ -105,10 +105,10 @@ const PANIC_MIN_THRESH: i16 = 150;
 /// Maximum drop for full panic allocation.
 const PANIC_MAX_THRESH: i16 = 350;
 /// Difference between PV and second-best move lending itself to decisiveness.
-const DECISIVE_PV_DIFF: i16 = 200;
+//const DECISIVE_PV_DIFF: i16 = 200;
 
 pub struct TimeManager {
-    recapture: Option<Sq>,
+    //recapture: Option<Sq>,
     allocated_time: Duration,
     maximum_time: Duration,
 
@@ -127,9 +127,9 @@ pub struct TimeManager {
 }
 
 impl TimeManager {
-    pub fn start(allocated_time: Duration, maximum_time: Duration, prev_move: Option<Move>) -> Self {
+    pub fn start(allocated_time: Duration, maximum_time: Duration, _prev_move: Option<Move>) -> Self {
         Self { 
-            recapture: prev_move.map(|m| m.to),
+            //recapture: prev_move.map(|m| m.to),
             allocated_time,
             maximum_time,
 
@@ -150,23 +150,17 @@ impl TimeManager {
     /// Returns `None` to indicate search termination, else returns the
     /// target cutoff search duration (kill the search if it is reached)
     /// which is always equal or larger than it was previously. 
-    /// ### Panics:
-    /// Panics if `info.evals.len()` equals zero.
+    /// 
+    /// `info` is expected to have a nonzero `pv` and `Some(_) = eval`.
     pub fn update(&mut self, info: &SearchInfo) -> Option<Duration> {
-        // if no moves are available, panic
-        assert_ne!(info.evals.len(), 0);
-        
+        assert_ne!(info.pv.len(), 0);
+        assert!(info.eval.is_some());
+
         let evaluation;
-        match info.evals[0].1 {
+        match info.eval.unwrap() {
             // If a forced mate is found, play immediately
             SearchEval::Mate(_) => return None,
             SearchEval::Normal(eval) => evaluation = eval,
-        }
-
-        let pv_diff;
-        match info.evals.get(1) {
-            Some(&(_, SearchEval::Normal(eval))) => pv_diff = evaluation - eval,
-            _ => return None, // Either only available move, or only one move avoids mate
         }
         
         // update time data
@@ -188,7 +182,7 @@ impl TimeManager {
         }
 
         // update pv data
-        let pv = info.evals[0].0;
+        let pv = info.pv[0];
         let is_new_pv = self.prev_pv.is_none() || self.prev_pv.unwrap() == pv;
         self.prev_pv = Some(pv);
         self.pv_concurr_count += 1;
@@ -234,13 +228,14 @@ impl TimeManager {
             }
         }
         
-        // check if elapsed is a significant fraction of allocated
+        // todo: reimplement this using refutation speed?
+        /* // check if elapsed is a significant fraction of allocated
         else if search_time > self.allocated_time.mul_f64(MIN_SEARCH) {
             // handle the case of an obvious recapture
             if self.recapture.map_or(false, |sq| sq == pv.to) {
                 if pv_diff > DECISIVE_PV_DIFF { return None; }
             }
-        }
+        } */
 
         Some(self.allocated_time.mul_f64(SEARCH_OVERSHOOT))
     }

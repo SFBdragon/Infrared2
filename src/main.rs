@@ -17,9 +17,12 @@ fn main() {
             }
             println!("Invalid epd command.");
             println!("infra[EXE] epd <filepath> <seconds per search>");
+        } else if arg == "test" {
+            tests::test_pos();
         } else {
             println!("Unknown arg(s)!");
             println!("Available args: ");
+            println!("infra[EXE] test");
             println!("infra[EXE] epd <filepath> <seconds per search>");
         }
     } else {

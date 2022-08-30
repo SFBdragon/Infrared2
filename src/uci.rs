@@ -1,6 +1,4 @@
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, io::Write};
-
-use infra::{Move, Board, Piece, SearchInfo, SearchEval, Game, SearchHandle, Side, opening, TimeControl, Sq, search::htab::{TransTable, self, PkEvalTable}};
+use std::{sync::{Arc, atomic::Ordering}, thread, io::Write};
 use crossbeam_channel::{Sender, Receiver};
 use vampirc_uci::{
     UciMessage, 
@@ -10,6 +8,8 @@ use vampirc_uci::{
     UciSquare, 
     UciInfoAttribute, UciFen, UciTimeControl,
 };
+
+use infra::{Move, Board, Piece, SearchInfo, SearchEval, Game, SearchHandle, Side, opening, TimeControl, Sq, search::htab::{TransTable, self, PkEvalTable}};
 
 
 struct SearchControl {
@@ -38,8 +38,6 @@ pub fn uci() {
 
     // UCI requires that the position be recalled across messages
     let mut position: Option<Game> = None;
-    // UCI hence requires that a bestmove be declarable on-demand
-    let mut best_move = Option::<UciMove>::None;
 
 
     // Stdin thread should block upon receiving lots of input
@@ -61,11 +59,10 @@ pub fn uci() {
         if search_info_index.is_some() && operation_index == search_info_index.unwrap() {
             let search_control_ref = search_control.as_ref().unwrap();
             if let Ok((info, is_final)) = search_control_ref.search_handle.info_channel.1.try_recv() {
-                best_move = uci_search_info(&position.as_ref().unwrap().position, info, is_final);
+                uci_search_info(&position.as_ref().unwrap().position, info, is_final);
                 if is_final {
                     search_control_ref.search_handle.kill_switch.store(true, Ordering::SeqCst);                
                     search_control = None;
-                    best_move = None;
                 }
             }
         } else if syzygy_info_index.is_some() && operation_index == syzygy_info_index.unwrap() {
@@ -74,7 +71,6 @@ pub fn uci() {
                 uci_search_info(&position.as_ref().unwrap().position, info, true);
                 search_control_ref.search_handle.kill_switch.store(true, Ordering::SeqCst);
                 search_control = None;
-                best_move = None;
             }
         } else if operation_index == stdin_index {
             if let Ok(input) = stdin_rcvr.try_recv() {
@@ -96,13 +92,11 @@ pub fn uci() {
                                 sc.search_handle.kill_switch.store(true, Ordering::SeqCst);
                             }
                             position = None;
-                            best_move = None;
                             trans_table = Arc::new(TransTable::with_memory(htab::TRANS_MEM_DEFAULT));
                             pk_eval_table = Arc::new(PkEvalTable::with_memory(htab::PK_EVAL_MEM_DEFAULT));
                         }
                         UciMessage::Position { startpos, fen, moves } => {
                             search_control = None;
-                            best_move = None;
                             position = uci_position(startpos, fen, moves)
                         }
                         UciMessage::Go { time_control, search_control: _ } => {
@@ -149,10 +143,9 @@ pub fn uci() {
                             }
                         }
                         UciMessage::Stop => {
-                            if let Some(sc) = std::mem::replace(&mut search_control, None) {
-                                uci_stop(best_move, None, sc.search_handle.kill_switch.as_ref());
+                            if let Some(sc) = search_control.as_ref() {
+                                sc.search_handle.kill_switch.store(true, Ordering::SeqCst);
                             }
-                            search_control = None;
                         }
                         UciMessage::Quit => {
                             if let Some(sc) = std::mem::replace(&mut search_control, None) {
@@ -232,69 +225,49 @@ fn uci_position(startpos: bool, fen: Option<UciFen>, moves: Vec<UciMove>) -> Opt
 }
 
 
-fn uci_stop(best: Option<UciMove>, ponder: Option<UciMove>, kill_switch: &AtomicBool) {
-    // kill the engine
-    kill_switch.store(true, Ordering::SeqCst);
-
-    // bestmove
-    if let Some(best_move) = best {
-        print!("{}\n", UciMessage::BestMove {
-            best_move: best_move,
-            ponder: ponder, 
-        });
-    } else {
-        eprintln!("\'stop\' issued without a best move!");
-    }
-}
-
-fn uci_search_info(position: &Board, info: SearchInfo, is_final: bool) -> Option<UciMove> {
-    let (pv_move, pv_eval) = info.evals[0];
-
-    // send 'info' message
-    print!("{}\n", UciMessage::Info(vec![
-        // send principal variation
-        UciInfoAttribute::Pv(vec![to_uci_move(&position, pv_move)]),
-        // send score
-        UciInfoAttribute::Score { 
-            cp: if let SearchEval::Normal(score) = pv_eval { Some(score as i32) } else { None },
-            mate: if let SearchEval::Mate(depth) = pv_eval { Some(depth) } else { None }, 
-            lower_bound: None, 
-            upper_bound: None 
-        },
-        // send depths
-        UciInfoAttribute::Depth(info.depth as u8),
-        UciInfoAttribute::SelDepth(info.sel_depth as u8),
-    ]));
+fn uci_search_info(position: &Board, info: SearchInfo, is_final: bool) {
+    let mov = info.pv[0];
 
     if is_final { // send 'bestmove'
         print!("{}\n", UciMessage::BestMove {
-            best_move: to_uci_move(position, pv_move),
+            best_move: to_uci_move(position, mov),
             ponder: None
         });
         std::io::stdout().flush().expect("stdout flush error");
-
-        // reset provisional best_move
-        None 
-    } else { // else only update provisional best_move
-        Some(to_uci_move(&position, pv_move)) 
     }
+
+    // send info message
+    let mut uci_info = vec![UciInfoAttribute::Pv(vec![to_uci_move(&position, mov)])];
+    if let Some(eval) = info.eval {
+        uci_info.push(UciInfoAttribute::Score { 
+            cp: if let SearchEval::Normal(score) = eval { Some(score as i32) } else { None },
+            mate: if let SearchEval::Mate(depth) = eval { Some(depth) } else { None }, 
+            lower_bound: None, 
+            upper_bound: None 
+        });
+    }
+    if let Some((depth, sel_depth)) = info.depth {
+        uci_info.push(UciInfoAttribute::Depth(depth as u8));
+        uci_info.push(UciInfoAttribute::SelDepth(sel_depth as u8));
+    }
+    print!("{}\n", UciMessage::Info(uci_info).to_string());
 }
 
 
 // Helpers
 
-fn to_uci_move(board: &Board, mov: Move) -> UciMove {
+fn to_uci_move(board: &Board, mv: Move) -> UciMove {
     UciMove {
         from: UciSquare {
-            file: char::from_u32((b'a' + mov.from.rank()) as u32).unwrap(),
-            rank: if board.side.is_white() { mov.from.file() + 1 } else { 8 - mov.from.file() },
+            file: (mv.from.file() + b'a') as char,
+            rank: mv.from.cflip(board.side).rank() + 1,
         },
         to: UciSquare {
-            file: char::from_u32((b'a' + mov.to.rank()) as u32).unwrap(),
-            rank: if board.side.is_white() { mov.to.file() + 1 } else { 8 - mov.to.file() },
+            file: (mv.to.file() + b'a') as char,
+            rank: mv.to.cflip(board.side).rank() + 1,
         },
-        promotion: if mov.piece != Piece::Pawn && (mov.from.bm()) & board.pawns != 0 {
-            Some(to_uci_piece(mov.piece))
+        promotion: if mv.piece != Piece::Pawn && mv.from.bm() & board.pawns != 0 {
+            Some(to_uci_piece(mv.piece))
         } else {
             None
         },
@@ -303,7 +276,7 @@ fn to_uci_move(board: &Board, mov: Move) -> UciMove {
 
 fn from_uci_move(board: &Board, mov: UciMove) -> Option<Move> {
     let from = Sq::file_rank(mov.from.file as u8 - b'a', mov.from.rank - 1).cflip(board.side);
-    let to   = Sq::file_rank(mov.to.file as u8 - b'a', mov.to.rank - 1).cflip(board.side);
+    let to   = Sq::file_rank(mov.to.file as u8 - b'a',   mov.to.rank - 1  ).cflip(board.side);
 
     let piece = match mov.promotion {
         Some(piece) => from_uci_piece(piece),

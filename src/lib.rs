@@ -35,7 +35,7 @@ macro_rules! as_result {
 
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Side {
     White = 1,
@@ -66,7 +66,7 @@ impl Not for Side {
 
 /// A square on a chess board.
 /// Represented as a zero-based byte index into `a1, a2, ... , b1, b2, ... , h8`.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Sq(u8);
 impl Sq {
@@ -105,18 +105,17 @@ impl Sq {
 
 
     pub const fn new(i: u8) -> Self {
-        assert!(i < 64);
+        debug_assert!(i < 64);
         Self(i)
     }
     pub const fn file_rank(file: u8, rank: u8) -> Self {
-        assert!(file < 8 && rank < 8);
+        debug_assert!(file < 8 && rank < 8);
         Self(file + rank * 8)
     }
     /// `Sq` from a bitmap's lowest set bit.
     pub const fn lsb(bm: u64) -> Self {
         Self(bm.trailing_zeros() as u8)
     }
-    
 
     /// Get the underlying `u8`, returns `0..=63`.
     pub const fn u8(self) -> u8 { self.0 }
@@ -132,6 +131,11 @@ impl Sq {
 
     /// Mirror the rank.
     pub const fn flip(self) -> Self { Self(self.0 ^ 0o70) }
+    /// Displace the index.
+    pub const fn offset(self, i: i8) -> Self {
+        debug_assert!(((self.0 as i8 + i) as u8) < 64);
+        Self((self.0 as i8 + i) as u8)
+    }
 
     /// Flips the rank if `side == Side::Black`.
     /// Converts between Infrared and standard Chess square encoding.
@@ -177,7 +181,7 @@ macro_rules! for_sq {
 
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Move {
     pub from: Sq,
     pub to: Sq,
@@ -190,6 +194,9 @@ impl Move {
 
     pub const fn new(from: Sq, to: Sq, piece: Piece) -> Self {
         Self { from, to, piece }
+    }
+    pub const fn offset(from: Sq, offset: i8, piece: Piece) -> Self {
+        Move { from, to: from.offset(offset), piece }
     }
 
     pub const fn cflip(self, side: Side) -> Move {
@@ -211,7 +218,7 @@ pub const BISHOP_IDX: usize = BISHOP as usize;
 pub const KNIGHT_IDX: usize = KNIGHT as usize;
 pub const PAWN_IDX: usize = PAWN as usize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Piece {
     King = KING,
@@ -222,8 +229,7 @@ pub enum Piece {
     Pawn = PAWN,
 }
 
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GameOver {
     Checkmate,
     Stalemate,
@@ -234,7 +240,7 @@ pub enum GameOver {
 
 
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CastleRights(u8);
 impl CastleRights {
     const KINGSIDE: u8 = 1 << 0;

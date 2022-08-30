@@ -1,26 +1,45 @@
 //! Piece move generation.
 
-use crate::{for_sq, Sq, Board, Move, Piece, board::fend};
+use crate::{for_sq, Sq, Board, Move, Piece, board::fend, search::ord::MoveBuffer};
 
 
 pub const PAWN_PROM_RANK: u64 = 0x00FF000000000000;
 
 impl Board {
-    /// Generates pseudo-legal pawn moves.
+    /// Bulk generates capturing pseudo-legal pawn moves, not en passant.
+    pub fn pawn_caps(&self, buf: &mut MoveBuffer) {
+        let pawns = self.pawns & self.actv & !PAWN_PROM_RANK;
+
+        let take_right = (self.idle & !0x0101010101010101) >> 0o11 & pawns;
+        for_sq!(from in take_right => buf.push(Move::offset(from, 0o11, Piece::Pawn)));
+        let take_left = (self.idle & !0x8080808080808080) >> 0o7 & pawns;
+        for_sq!(from in take_left => buf.push(Move::offset(from, 0o7, Piece::Pawn)));
+    }
+
+    /// Bulk generates non-capturing pseudo-legal pawn moves and en passant.
     #[inline]
-    fn pawn_moves(&self, sq: Sq) -> MoveSet {
-        let mut to_set = 0u64;
-        let from_bm = sq.bm();
-        debug_assert!(from_bm & 0xFFFF0000000000FF == 0);
+    pub fn pawn_ncaps(&self, buf: &mut MoveBuffer) {
+        let pawns = self.pawns & self.actv & !PAWN_PROM_RANK;
 
-        to_set |= from_bm << 0o10 & !self.all;
-        to_set |= (to_set & 0xFF0000) << 0o10 & !self.all;
+        // en passant
+        if self.en_passant != 0 {
+            if (self.en_passant & !0x8080808080808080) >> 0o7  & pawns != 0 {
+                let from = Sq::new((self.en_passant >> 0o7  & pawns).trailing_zeros() as u8);
+                buf.push(Move::offset(from, 0o7, Piece::Pawn));
+            }
+            if (self.en_passant & !0x0101010101010101) >> 0o11 & pawns != 0 {
+                let from = Sq::new((self.en_passant >> 0o11 & pawns).trailing_zeros() as u8);
+                buf.push(Move::offset(from, 0o11, Piece::Pawn));
+            }
+        }
 
-        let capt = self.idle | self.en_passant;
-        to_set |= (from_bm & !0x0101010101010101) << 0o7  & capt;
-        to_set |= (from_bm & !0x8080808080808080) << 0o11 & capt;
-    
-        MoveSet { to_set, from: sq, piece: Piece::Pawn }
+        // normal advances
+        let bumps = pawns & !(self.all >> 0o10);
+        for_sq!(from in bumps => buf.push(Move::offset(from, 0o10, Piece::Pawn)));
+
+        // double advances
+        let jumps = bumps & 0xFF00 & !(self.all >> 0o20);
+        for_sq!(from in jumps => buf.push(Move::offset(from, 0o20, Piece::Pawn)));
     }
 
     /// Generates pseudo-legal promotions.
@@ -38,42 +57,59 @@ impl Board {
         PromSet { to_set, from: sq }
     }
 
+    /// Generates pseudo-legal pawn moves.
+    #[inline]
+    fn pawn_moves(&self, sq: Sq) -> MoveSet {
+        let mut to_set = 0u64;
+        let from_bm = sq.bm();
+        debug_assert!(from_bm & 0xFFFF0000000000FF == 0);
+
+        to_set |= from_bm << 0o10 & !self.all;
+        to_set |= (to_set & 0xFF0000) << 0o10 & !self.all;
+
+        let capt = self.idle | self.en_passant;
+        to_set |= (from_bm & !0x0101010101010101) << 0o7  & capt;
+        to_set |= (from_bm & !0x8080808080808080) << 0o11 & capt;
+    
+        MoveSet { to_set, from: sq, piece: Piece::Pawn }
+    }
+
     /// Generates pseudo-legal knight moves.
     #[inline]
-    fn knight_moves(&self, sq: Sq) -> MoveSet {
+    fn knight_moves(&self, sq: Sq, to_mask: u64) -> MoveSet {
         MoveSet {
             from: sq,
-            to_set: fend::knight_fend(sq) & !self.actv,
+            to_set: fend::knight_fend(sq) & to_mask,
             piece: Piece::Knight,
         }
     }
 
     /// Generates pseudo-legal bishop moves.
     #[inline]
-    fn bishop_moves(&self, sq: Sq) -> MoveSet {
+    fn bishop_moves(&self, sq: Sq, to_mask: u64) -> MoveSet {
         MoveSet {
             from: sq,
-            to_set: fend::bishop_fend(sq, self.all) & !self.actv,
+            to_set: fend::bishop_fend(sq, self.all) & to_mask,
             piece: Piece::Bishop,
         }
     }
 
     /// Generates pseudo-legal rook moves.
     #[inline]
-    fn rook_moves(&self, sq: Sq) -> MoveSet {
+    fn rook_moves(&self, sq: Sq, to_mask: u64) -> MoveSet {
         MoveSet {
             from: sq,
-            to_set: fend::rook_fend(sq, self.all) & !self.actv,
+            to_set: fend::rook_fend(sq, self.all) & to_mask,
             piece: Piece::Rook,
         }
     }
 
     /// Generates pseudo-legal queen moves.
     #[inline]
-    fn queen_moves(&self, sq: Sq) -> MoveSet {
+    fn queen_moves(&self, sq: Sq, to_mask: u64) -> MoveSet {
         MoveSet {
             from: sq,
-            to_set: fend::queen_fend(sq, self.all) & !self.actv,
+            to_set: fend::queen_fend(sq, self.all) & to_mask,
             piece: Piece::Queen,
         }
     }
@@ -102,54 +138,29 @@ impl Board {
         
         MoveSet { from: self.actv_king, to_set, piece: Piece::King }
     }
-
-    /// Generate all legal moves until closure returns true.
-    #[inline]
-    pub fn for_mov<F: FnMut(Move) -> bool>(&self, mut f: F) {
-        // while seemingly ripe for refactor, note: return embedding; highly layered closures tank search perf; column associativity -> maintainability
-        for_sq!(sq in self.pawns & self.actv &  PAWN_PROM_RANK => for m in self.pawn_proms  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
-        for_sq!(sq in self.pawns & self.actv & !PAWN_PROM_RANK => for m in self.pawn_moves  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
-        for_sq!(sq in self.knights & self.actv                 => for m in self.knight_moves(sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
-        for_sq!(sq in self.bishops & self.actv                 => for m in self.bishop_moves(sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
-        for_sq!(sq in self.rooks & self.actv                   => for m in self.rook_moves  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
-        for_sq!(sq in self.queens & self.actv                  => for m in self.queen_moves (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
-        /* programming is an art! */                              for m in self.king_moves  (  ).iter() { if                     (&mut f)(m) { return } }
-    }
-    
-    /// Generate all legal moves until closure returns true.
-    #[inline]
-    pub fn for_role_mov<F: FnMut(Move) -> bool>(&self, role: Piece, mut f: F) {
-        match role { // on the other hand, this function could probably use improvement
-            Piece::Pawn =>   { for_sq!(sq in self.pawns & self.actv &  PAWN_PROM_RANK => for m in self.pawn_proms  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
-                               for_sq!(sq in self.pawns & self.actv & !PAWN_PROM_RANK => for m in self.pawn_moves  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
-            Piece::Knight => { for_sq!(sq in self.knights & self.actv                 => for m in self.knight_moves(sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
-            Piece::Bishop => { for_sq!(sq in self.bishops & self.actv                 => for m in self.bishop_moves(sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
-            Piece::Rook =>   { for_sq!(sq in self.rooks & self.actv                   => for m in self.rook_moves  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
-            Piece::Queen =>  { for_sq!(sq in self.queens & self.actv                  => for m in self.queen_moves (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
-            Piece::King =>   {                                                           for m in self.king_moves  (  ).iter() { if                     (&mut f)(m) { return } };  },
-        }
-    }
     
     /// Checks whether a generated pseudo-legal move is legal.
+    /// 
+    /// Note: never rejects king moves. Illegal king moves are never generated.
     pub fn is_legal(&self, Move { from, to, piece }: Move) -> bool {
-        let king_sq = if let Piece::King = piece { to } else { self.actv_king };
-        let (from_bm, to_bm) = (from.bm(), to.bm());
+        if let Piece::King = piece { return true; };
 
+        let to_bm = to.bm();
         let ep = if to_bm & self.en_passant != 0 && piece == Piece::Pawn { to_bm >> 0o10 } else { 0 }; // en passant
-        let all = self.all & !from_bm & !ep | to_bm;
+        let all = self.all & !from.bm() & !ep | to_bm;
         let idle = self.idle & !to_bm & !ep;
         
-        fend::knight_fend(king_sq) & self.knights & idle == 0
-        && fend::bishop_fend(king_sq, all) & (self.bishops | self.queens) & idle == 0
-        && fend::rook_fend(king_sq, all) & (self.rooks | self.queens) & idle == 0
-        && fend::pawn_fend_actv(king_sq) & self.pawns & idle == 0
+        fend::knight_fend(self.actv_king) & self.knights & idle == 0
+        && fend::bishop_fend(self.actv_king, all) & (self.bishops | self.queens) & idle == 0
+        && fend::rook_fend(self.actv_king, all) & (self.rooks | self.queens) & idle == 0
+        && fend::pawn_fend_actv(self.actv_king) & self.pawns & idle == 0
     }
 
     /// Test if an arbitrary move is valid and legal in this position.
-    pub fn is_valid(&self, mov: Move) -> bool {
-        let piece = mov.piece;
-        let from_bm = mov.from.bm();
-        let to_bm = mov.to.bm();
+    pub fn is_valid(&self, mv: Move) -> bool {
+        let piece = mv.piece;
+        let from_bm = mv.from.bm();
+        let to_bm = mv.to.bm();
 
         // check if an actv piece exists on this square
         if from_bm & self.actv == 0 { return false; }
@@ -160,22 +171,93 @@ impl Board {
             if piece == Piece::Pawn || piece == Piece::King { return false; }
 
             // ensure valid move
-            self.pawn_proms(mov.from).to_set & to_bm != 0 && self.is_legal(mov)
+            self.pawn_proms(mv.from).to_set & to_bm != 0 && self.is_legal(mv)
         } else {
             // ensure piece identity
-            if self.get_piece_at(mov.from) != Some(piece) { return false; }
+            if self.get_piece_at(mv.from) != Some(piece) { return false; }
 
             // ensure valid move
             let to_set = match piece {
-                Piece::King => self.king_moves().to_set,
-                Piece::Queen => self.queen_moves(mov.from).to_set,
-                Piece::Rook => self.rook_moves(mov.from).to_set,
-                Piece::Bishop => self.bishop_moves(mov.from).to_set,
-                Piece::Knight => self.knight_moves(mov.from).to_set,
-                Piece::Pawn => self.pawn_moves(mov.from).to_set,
+                Piece::King =>   self.king_moves().to_set,
+                Piece::Queen =>  self.queen_moves (mv.from, !self.actv).to_set,
+                Piece::Rook =>   self.rook_moves  (mv.from, !self.actv).to_set,
+                Piece::Bishop => self.bishop_moves(mv.from, !self.actv).to_set,
+                Piece::Knight => self.knight_moves(mv.from, !self.actv).to_set,
+                Piece::Pawn =>   self.pawn_moves  (mv.from).to_set,
             };
 
-            to_set & to_bm != 0 && self.is_legal(mov)
+            to_set & to_bm != 0 && self.is_legal(mv)
+        }
+    }
+
+    pub fn gen_proms(&self, buf: &mut MoveBuffer) {
+        for_sq!(sq in self.pawns & self.actv & PAWN_PROM_RANK => 
+            for mv in self.pawn_proms(sq).iter() {
+                if self.is_legal(mv) {
+                    buf.push(mv);
+                }
+            }
+        );
+    }
+
+    /// Generate all pseudo-legal non-capturing* moves. No promotions.
+    /// 
+    /// Note that generated king moves are always legal, and may capture.
+    pub fn gen_ncaps(&self, buf: &mut MoveBuffer) {
+        self.pawn_ncaps(buf);
+        for_sq!(sq in self.knights & self.actv => for m in self.knight_moves(sq, !self.all).iter() { buf.push(m) });
+        for_sq!(sq in self.bishops & self.actv => for m in self.bishop_moves(sq, !self.all).iter() { buf.push(m) });
+        for_sq!(sq in self.rooks & self.actv   => for m in self.rook_moves  (sq, !self.all).iter() { buf.push(m) });
+        for_sq!(sq in self.queens & self.actv  => for m in self.queen_moves (sq, !self.all).iter() { buf.push(m) });
+        /* programming is an art! */              for m in self.king_moves  (             ).iter() { buf.push(m) }
+    }
+    /// Generate non-king pseudo-legal capturing moves. No promotions.
+    pub fn gen_caps(&self, buf: &mut MoveBuffer) {
+        self.pawn_caps(buf);
+        for_sq!(sq in self.knights & self.actv => for m in self.knight_moves(sq, self.idle).iter() { buf.push(m) });
+        for_sq!(sq in self.bishops & self.actv => for m in self.bishop_moves(sq, self.idle).iter() { buf.push(m) });
+        for_sq!(sq in self.rooks & self.actv   => for m in self.rook_moves  (sq, self.idle).iter() { buf.push(m) });
+        for_sq!(sq in self.queens & self.actv  => for m in self.queen_moves (sq, self.idle).iter() { buf.push(m) });
+    }
+
+    /// Generates all pseudo-legal moves.
+    pub fn gen_all(&self, buf: &mut MoveBuffer) {
+        self.gen_proms(buf);
+        self.pawn_caps(buf);
+        self.pawn_ncaps(buf);
+        for_sq!(sq in self.knights & self.actv => for m in self.knight_moves(sq, !self.actv).iter() { buf.push(m) });
+        for_sq!(sq in self.bishops & self.actv => for m in self.bishop_moves(sq, !self.actv).iter() { buf.push(m) });
+        for_sq!(sq in self.rooks & self.actv   => for m in self.rook_moves  (sq, !self.actv).iter() { buf.push(m) });
+        for_sq!(sq in self.queens & self.actv  => for m in self.queen_moves (sq, !self.actv).iter() { buf.push(m) });
+        /* programming is an art! */              for m in self.king_moves  (             ).iter() { buf.push(m) }
+    }
+
+    /// Generate all legal moves until closure returns true.
+    #[inline]
+    pub fn for_move<F: FnMut(Move) -> bool>(&self, mut f: F) {
+        // while seemingly ripe for refactor, note: return embedding; highly layered closures tank search perf; column associativity -> maintainability
+        let aps = self.pawns & self.actv;
+        for_sq!(sq in aps &  PAWN_PROM_RANK    => for m in self.pawn_proms  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+        for_sq!(sq in aps & !PAWN_PROM_RANK    => for m in self.pawn_moves  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+        for_sq!(sq in self.knights & self.actv => for m in self.knight_moves(sq, !self.actv).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+        for_sq!(sq in self.bishops & self.actv => for m in self.bishop_moves(sq, !self.actv).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+        for_sq!(sq in self.rooks & self.actv   => for m in self.rook_moves  (sq, !self.actv).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+        for_sq!(sq in self.queens & self.actv  => for m in self.queen_moves (sq, !self.actv).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+        /* programming is an art! */              for m in self.king_moves  (  ).iter() { if (&mut f)(m) { return } }
+    }
+    
+    /// Generate all legal moves until closure returns true.
+    #[inline]
+    pub fn for_role_move<F: FnMut(Move) -> bool>(&self, role: Piece, mut f: F) {
+        let aps = self.pawns & self.actv;
+        match role { // on the other hand, this function could probably use improvement
+            Piece::Pawn =>   { for_sq!(sq in aps &  PAWN_PROM_RANK    => for m in self.pawn_proms  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } });
+                               for_sq!(sq in aps & !PAWN_PROM_RANK    => for m in self.pawn_moves  (sq).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
+            Piece::Knight => { for_sq!(sq in self.knights & self.actv => for m in self.knight_moves(sq, !self.actv).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
+            Piece::Bishop => { for_sq!(sq in self.bishops & self.actv => for m in self.bishop_moves(sq, !self.actv).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
+            Piece::Rook =>   { for_sq!(sq in self.rooks & self.actv   => for m in self.rook_moves  (sq, !self.actv).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
+            Piece::Queen =>  { for_sq!(sq in self.queens & self.actv  => for m in self.queen_moves (sq, !self.actv).iter() { if self.is_legal(m) && (&mut f)(m) { return } }); },
+            Piece::King =>   {                                           for m in self.king_moves  (  ).iter() { if                     (&mut f)(m) { return } };  },
         }
     }
 }

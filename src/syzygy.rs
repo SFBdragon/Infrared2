@@ -62,25 +62,25 @@ pub fn uci_syzygy_query(board: &Board, info_sndr: Sender<SearchInfo>) {
     use crate::search::{SearchEval, eval};
 
     if let Some(syzygy) = query_table_data(&board, Duration::from_secs(10)) {
-        if let Some(mov) = syzygy.moves.first().and_then(|m| from_uci_move_str(&board, m.uci.clone())) {
+        if let Some(mv) = syzygy.moves.first().and_then(|m| from_uci_move_str(&board, m.uci.clone())) {
             let eval = match syzygy.dtm {
-                Some(dtm) if dtm.abs() <= 128 => SearchEval::Mate(dtm as i8),
+                Some(dtm) if dtm.abs() <= 128 => Some(SearchEval::Mate(dtm as i8)),
                 _ => match syzygy.category.as_str() {
-                    "win" => SearchEval::Normal(-eval::MATE),
-                    "maybe-win" => SearchEval::Normal(-eval::MATE),
-                    "cursed-win" => SearchEval::Normal(-eval::MATE),
-                    "draw" => SearchEval::Normal(eval::DRAW),
-                    "blessed-loss" => SearchEval::Normal(eval::MATE),
-                    "maybe-loss" => SearchEval::Normal(eval::MATE),
-                    "loss" => SearchEval::Normal(eval::MATE),
-                    _ => SearchEval::Normal(eval::DRAW),
+                    "win" =>          Some(SearchEval::Normal(-eval::MATE)),
+                    "maybe-win" =>    Some(SearchEval::Normal(-eval::UNCERTAIN_MATE)),
+                    "cursed-win" =>   Some(SearchEval::Normal(-eval::UNCERTAIN_MATE)),
+                    "draw" =>         Some(SearchEval::Normal(eval::DRAW)),
+                    "blessed-loss" => Some(SearchEval::Normal(eval::UNCERTAIN_MATE)),
+                    "maybe-loss" =>   Some(SearchEval::Normal(eval::UNCERTAIN_MATE)),
+                    "loss" =>         Some(SearchEval::Normal(eval::MATE)),
+                    _ => None,
                 },
             };
             let info = SearchInfo {
                 /// only report on the best move, as it's the only that's been 'evaluated'
-                evals: vec![(mov, eval)],
-                depth: 0,
-                sel_depth: 0,
+                pv: vec![mv],
+                eval,
+                depth: None,
             };
             info_sndr.send(info).unwrap();
         }
@@ -89,24 +89,24 @@ pub fn uci_syzygy_query(board: &Board, info_sndr: Sender<SearchInfo>) {
 
 
 
-fn from_uci_move_str(board: &Board, mov: String) -> Option<Move> {
+fn from_uci_move_str(board: &Board, mv: String) -> Option<Move> {
     use crate::Piece;
     
-    let mov = mov.as_str().trim();
-    if !mov.is_ascii() { return None; }
-    if mov.len() != 4 && mov.len() != 5 { return None; }
+    let mv = mv.as_str().trim();
+    if !mv.is_ascii() { return None; }
+    if mv.len() != 4 && mv.len() != 5 { return None; }
 
-    let from = Sq::from_alg(&mov[0..2])?.cflip(board.side);
-    let to   = Sq::from_alg(&mov[2..4])?.cflip(board.side);
+    let from = Sq::from_alg(&mv[0..2])?.cflip(board.side);
+    let to   = Sq::from_alg(&mv[2..4])?.cflip(board.side);
 
-    let piece = mov.chars().skip(4).next().map_or(
+    let piece = mv.chars().skip(4).next().map_or(
         board.get_piece_at(from), 
         |ch| Piece::from_char_prom(ch.to_ascii_uppercase())
     )?;
     
-    let mov = Move::new(from, to, piece);
+    let mv = Move::new(from, to, piece);
 
-    board.is_valid(mov).then_some(mov)
+    board.is_valid(mv).then_some(mv)
 }
 
 

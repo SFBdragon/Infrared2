@@ -138,24 +138,24 @@ impl Move {
     
         // test if a legal move matches the criteria (or detect ambiguity)
         let mut decode = None;
-        board.for_role_mov(piece, |mov| {
-            if to != mov.to {
+        board.for_role_move(piece, |mv| {
+            if to != mv.to {
                 return false;
             }
             if let Some(from_file) = from_file {
-                if from_file != mov.from.file() { return false; }
+                if from_file != mv.from.file() { return false; }
             }
             if let Some(from_rank) = from_rank {
-                if from_rank != mov.from.rank() { return false; }
+                if from_rank != mv.from.rank() { return false; }
             }
             if let Some(prom) = promotion {
-                if piece != Piece::Pawn || mov.piece != prom {
+                if piece != Piece::Pawn || mv.piece != prom {
                     return false;
                 }
             }
     
             // detected move ambiguity
-            decode = decode.map_or(Some(mov), |_| None);
+            decode = decode.map_or(Some(mv), |_| None);
             decode.is_none()
         });
     
@@ -181,13 +181,13 @@ impl Move {
         }
 
         // from square (not supressed in LAN)
-        san.push_str(self.from.to_alg().as_str());
+        san.push_str(self.from.cflip(board.side).to_alg().as_str());
 
         // capture
         if board.idle & self.to.bm() != 0 { san.push('x'); }
 
         // to square
-        san.push_str(self.to.to_alg().as_str());
+        san.push_str(self.to.cflip(board.side).to_alg().as_str());
 
         // promotion
         if board_piece != self.piece {
@@ -201,7 +201,7 @@ impl Move {
         let mut b = board.clone();
         assert!(b.is_valid(self));
         b.make(self);
-        if b.is_actv_in_check() {
+        if b.in_check() {
             san.push(if let Some(GameOver::Checkmate) = b.is_mate() { '#' } else { '+' });
         }
 
@@ -331,7 +331,7 @@ impl Board {
             actv_king: if side.is_white() { white_king } else { black_king },
             idle_king: if side.is_black() { white_king } else { black_king },
             en_passant,
-            move_count,
+            ply_number: (move_count - 1) * 2 + side.is_black() as u16,
             side,
             fifty_move_clock,
             actv_castle_rights: if side.is_white() { white_castle_rights } else { black_castle_rights },
@@ -415,7 +415,7 @@ impl Board {
             fen.push(' ');
             fen.push_str(self.fifty_move_clock.to_string().as_str());
             fen.push(' ');
-            fen.push_str(self.move_count.to_string().as_str());
+            fen.push_str((self.fullmove_number()).to_string().as_str());
         }
 
         fen

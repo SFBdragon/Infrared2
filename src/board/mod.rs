@@ -29,8 +29,8 @@ pub struct Board {
     /// Pawn and king zobrist hash.
     pub pk_hash: u64,
 
-    /// Move count since game begin.
-    pub move_count: u16,
+    /// Plies since game begin.
+    pub ply_number: u16,
     /// Count plies to 100 since the last capture or pawn-advance.
     pub fifty_move_clock: u16,
     /// Side to move.
@@ -41,7 +41,22 @@ pub struct Board {
     pub idle_castle_rights: CastleRights,
 }
 
+pub struct Unmake {
+    pub hash: u64,
+    pub pk_hash: u64,
+    pub actv_castle_rights: CastleRights,
+    pub idle_castle_rights: CastleRights,
+
+    pub en_passant_sq: Sq,
+    pub on_pawn_move: bool,
+}
+
 impl Board {
+    /// Returns the piece at sq, if there is one.
+    pub fn fullmove_number(&self) -> u16 {
+        self.ply_number / 2 + 1
+    }
+
     /// Returns the piece at sq, if there is one.
     pub fn get_piece_at(&self, sq: Sq) -> Option<Piece> {
         let bm = sq.bm();
@@ -80,7 +95,7 @@ impl Board {
     }
 
     #[inline]
-    pub fn is_actv_in_check(&self) -> bool {
+    pub fn in_check(&self) -> bool {
         self.is_tile_cvrd_idle(self.actv_king)
     }
     /// If this ever returns true, a bug has occured.
@@ -249,13 +264,13 @@ impl Board {
 
         // bookkeeping
         self.flip();
-        self.move_count += self.side as u16;
+        self.ply_number += 1;
     }
 
     /// Play a null move and flip the player turn.
     pub fn make_null(&mut self) {
         self.flip();
-        self.move_count += self.side as u16;
+        self.ply_number += 1;
         self.fifty_move_clock += 1;
         
         if self.en_passant != 0 {
@@ -269,10 +284,10 @@ impl Board {
     pub fn is_mate(&self) -> Option<GameOver> {
         // if any move can be legally played, no mate
         let mut legal_move_exists = false;
-        self.for_mov(|_| { legal_move_exists = true; true });
+        self.for_move(|_| { legal_move_exists = true; true });
         if legal_move_exists { return None; }
         
-        Some(match self.is_actv_in_check() {
+        Some(match self.in_check() {
             true => GameOver::Checkmate,
             false => GameOver::Stalemate,
         })
@@ -365,7 +380,7 @@ impl Board {
         // validate misc data as best as possible
         as_result!(self.hash == zobrist::compute_hash(&self))?;
         as_result!(self.pk_hash == zobrist::compute_pk_hash(&self))?;
-        as_result!(self.fifty_move_clock <= (self.move_count - 1) * 2 + 1)?;
+        as_result!(self.fifty_move_clock <= self.ply_number)?;
 
         Ok(())
     }
