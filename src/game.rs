@@ -2,14 +2,12 @@ use std::{sync::{Arc, atomic::AtomicBool}, thread::JoinHandle};
 
 use crossbeam_channel::{Sender, Receiver};
 
-pub use crate::{
+use crate::{
     Board, Move, GameOver, 
     opening, board, search,
     board::zobrist::{PosHashMap, U64IdentHashBuilder},
-    search::{SearchInfo, SearchEval, time::TimeControl},
-    search::htab::{TransTable, self, PkEvalTable},
+    search::{SearchInfo, time::TimeControl},
 };
-
 
 
 #[derive(Debug, Clone)]
@@ -72,6 +70,8 @@ impl Game {
             }
         }
 
+        Self::update_hash_data(&mut book_distance, &mut prev_hashes, position.hash);
+
         position.validate().unwrap();
 
         Ok(Self {
@@ -116,11 +116,7 @@ impl Game {
     }
 
 
-    pub fn search(&self,
-        time_control: TimeControl, 
-        trans_table: Option<Arc<TransTable>>,
-        pk_eval_table: Option<Arc<PkEvalTable>>,
-    ) -> SearchHandle {
+    pub fn search(&self, time_control: TimeControl) -> SearchHandle {
         let kill_switch = Arc::new(AtomicBool::new(false));
         let (sndr, rcvr) = crossbeam_channel::unbounded();
 
@@ -132,12 +128,9 @@ impl Game {
             search::search(
                 thread_game.position,
                 thread_game.prev_hashes,
-                thread_game.move_list.last().map(|&m| m),
                 thread_sndr,
                 thread_kill_switch,
                 time_control.allocate_time(thread_game.book_distance),
-                trans_table.unwrap_or(Arc::new(TransTable::with_memory(htab::TRANS_MEM_DEFAULT))),
-                pk_eval_table.unwrap_or(Arc::new(PkEvalTable::with_memory(htab::PK_EVAL_MEM_DEFAULT))),
             )
         });
 

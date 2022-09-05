@@ -59,7 +59,7 @@ fn query_table_data(board: &Board, timeout: Duration) -> Option<RawSyzygyData> {
 
 /// Returns the best move ala Syzygy Tablebase, if available.
 pub fn uci_syzygy_query(board: &Board, info_sndr: Sender<SearchInfo>) {
-    use crate::search::{SearchEval, eval};
+    use crate::{board::eval, search::SearchEval};
 
     if let Some(syzygy) = query_table_data(&board, Duration::from_secs(10)) {
         if let Some(mv) = syzygy.moves.first().and_then(|m| from_uci_move_str(&board, m.uci.clone())) {

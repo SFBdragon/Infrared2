@@ -1,4 +1,4 @@
-# Infrared2
+# Infrared 2
 Infrared Chess Engine 2: Rusty Boogaloo
 
 Under construction.

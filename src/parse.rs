@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use crate::{Sq, Board, Piece, Side, Move, GameOver, CastleRights, board::zobrist};
+use crate::{Sq, Board, Piece, Side, Move, GameOver, CastleRights, board::{zobrist, eval}};
 
 
 impl Sq {
@@ -138,7 +138,7 @@ impl Move {
     
         // test if a legal move matches the criteria (or detect ambiguity)
         let mut decode = None;
-        board.for_role_move(piece, |mv| {
+        board.clone().for_role_move(piece, |mv| {
             if to != mv.to {
                 return false;
             }
@@ -319,7 +319,6 @@ impl Board {
         
         let mut board = Self {
             hash: 0,
-            pk_hash: 0,
             all: white | black,
             actv: if side.is_white() { white } else { black },
             idle: if side.is_black() { white } else { black },
@@ -331,16 +330,21 @@ impl Board {
             actv_king: if side.is_white() { white_king } else { black_king },
             idle_king: if side.is_black() { white_king } else { black_king },
             en_passant,
-            ply_number: (move_count - 1) * 2 + side.is_black() as u16,
+            total_ply_number: (move_count - 1) * 2 + side.is_black() as u16,
             side,
             fifty_move_clock,
             actv_castle_rights: if side.is_white() { white_castle_rights } else { black_castle_rights },
             idle_castle_rights: if side.is_black() { white_castle_rights } else { black_castle_rights },
+            eval: [0, 0],
+            phase: 0,
         };
 
-        // once everything is said an done, compute the hashes
+        // once everything is said an done, compute the hashes and eval
+        let (eval, phase) = eval::calc_eval_phase(&board);
+        board.eval = eval;
+        board.phase = phase;
         board.hash = zobrist::compute_hash(&board);
-        board.pk_hash = zobrist::compute_pk_hash(&board);
+        
         // then validate the position
         board.validate().map(|_| board)
     }

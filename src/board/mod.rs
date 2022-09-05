@@ -1,8 +1,9 @@
 pub mod fend;
 pub mod mov;
 pub mod zobrist;
+pub mod eval;
 
-use crate::{Sq, Side, Piece, Move, CastleRights, GameOver};
+use crate::{Sq, Side, Piece, Move, CastleRights, GameOver, board::eval::{IDLE, ACTV}, PAWN_IDX, ROOK_IDX};
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,35 +27,26 @@ pub struct Board {
     pub en_passant: u64,
     /// Position zobrist hash.
     pub hash: u64,
-    /// Pawn and king zobrist hash.
-    pub pk_hash: u64,
 
-    /// Plies since game begin.
-    pub ply_number: u16,
-    /// Count plies to 100 since the last capture or pawn-advance.
-    pub fifty_move_clock: u16,
     /// Side to move.
     pub side: Side,
-    /// `next`'s castling capabilities.
+    /// Plies since game begin.
+    pub total_ply_number: u16,
+    /// Count plies to 100 since the last capture or pawn-advance.
+    pub fifty_move_clock: u16,
+    /// `actv`'s castling capabilities.
     pub actv_castle_rights: CastleRights,
-    /// `prev`'s castling capabilities.
-    pub idle_castle_rights: CastleRights,
-}
-
-pub struct Unmake {
-    pub hash: u64,
-    pub pk_hash: u64,
-    pub actv_castle_rights: CastleRights,
+    /// `idle`'s castling capabilities.
     pub idle_castle_rights: CastleRights,
 
-    pub en_passant_sq: Sq,
-    pub on_pawn_move: bool,
+    pub eval: [i16; 2],
+    pub phase: u8,
 }
 
 impl Board {
     /// Returns the piece at sq, if there is one.
     pub fn fullmove_number(&self) -> u16 {
-        self.ply_number / 2 + 1
+        self.total_ply_number / 2 + 1
     }
 
     /// Returns the piece at sq, if there is one.
@@ -104,7 +96,7 @@ impl Board {
         self.is_tile_cvrd_actv(self.idle_king)
     }
 
-    /// Flip the board. Does not update move counters.
+    /// Flip the board back/forth.
     #[inline]
     pub fn flip(&mut self) {
         self.side = self.side.flip();
@@ -117,19 +109,28 @@ impl Board {
         (self.actv_king, self.idle_king) = (self.idle_king.flip(), self.actv_king.flip());
         (self.actv, self.idle) = (self.idle.swap_bytes(), self.actv.swap_bytes());
         (self.actv_castle_rights, self.idle_castle_rights) = (self.idle_castle_rights, self.actv_castle_rights);
+        self.eval[0] = -self.eval[0];
+        self.eval[1] = -self.eval[1];
 
         self.all = self.actv | self.idle;
         self.hash ^= zobrist::COLOUR_HASH;
     }
 
 
+    /// Play a null move and flip the player turn.
+    #[inline]
+    pub fn clone_make(&self, mv: Move) -> Self {
+        let mut clone = self.clone();
+        clone.make(mv);
+        clone
+    }
     /// Play a move on the board, and flip the player turn.
     /// 
     /// Note that legality is not checked.
     pub fn make(&mut self, Move { from, to, piece }: Move) {
         let from_bm = from.bm();
         let to_bm = to.bm();
-        
+
         self.fifty_move_clock += 1;
         
         // handle capture
@@ -137,13 +138,12 @@ impl Board {
             // remove piece & reset 50-move rule clock
             self.idle &= !to_bm;
             self.fifty_move_clock = 0;
-            let cap_zhash = zobrist::get_piece_hash_idle(!self.side, cap, to);
-            self.hash ^= cap_zhash;
+            self.hash ^= zobrist::get_piece_hash_idle(!self.side, cap, to);
+            self.eval_sub(eval::PSQT[IDLE][cap as usize][to.us()]);
+            self.phase -= eval::PHASE_ADJUST[cap as usize];
+
             match cap {
-                Piece::Pawn => {
-                    self.pawns &= !to_bm;
-                    self.pk_hash ^= cap_zhash; 
-                },
+                Piece::Pawn => self.pawns &= !to_bm,
                 Piece::Knight => self.knights &= !to_bm,
                 Piece::Bishop => self.bishops &= !to_bm,
                 Piece::Queen => self.queens &= !to_bm,
@@ -161,11 +161,7 @@ impl Board {
                         }
                     }
                 }
-                Piece::King => panic!("king captured! {} | {:?} | {:?}", 
-                    self.to_fen(true), 
-                    Move::new(from, to, piece), 
-                    &self
-                ),
+                Piece::King => unreachable!(),
             }
         } else {
             // check for en passant before assuming no capture
@@ -174,13 +170,12 @@ impl Board {
                 self.pawns &= !cap;
                 self.idle &= !cap;
                 self.fifty_move_clock = 0;
-                let cap_zhash = zobrist::get_piece_hash_idle(
+                self.hash ^= zobrist::get_piece_hash_idle(
                     !self.side,
                     Piece::Pawn,
                     Sq::lsb(to.bm() >> 0o10)
                 );
-                self.hash ^= cap_zhash;
-                self.pk_hash ^= cap_zhash;
+                self.eval_sub(eval::PSQT[IDLE][PAWN_IDX][to.us() - 8]);
             }
         }
         
@@ -224,12 +219,16 @@ impl Board {
                     self.rooks = self.rooks & !0x80 | 0x20;
                     self.actv = self.actv & !0x80 | 0x20;
                     self.hash ^= zobrist::get_piece_hash_actv(self.side, Piece::Rook, Sq::H1);
+                    self.eval_sub(eval::PSQT[ACTV][ROOK_IDX][Sq::H1.us()]);
                     self.hash ^= zobrist::get_piece_hash_actv(self.side, Piece::Rook, Sq::F1);
+                    self.eval_add(eval::PSQT[ACTV][ROOK_IDX][Sq::F1.us()]);
                 } else if from_bm == to_bm << 2 { // queenside castle!
                     self.rooks = self.rooks & !0x1 | 0x8;
                     self.actv = self.actv & !0x1 | 0x8;
                     self.hash ^= zobrist::get_piece_hash_actv(self.side, Piece::Rook, Sq::A1);
+                    self.eval_sub(eval::PSQT[ACTV][ROOK_IDX][Sq::A1.us()]);
                     self.hash ^= zobrist::get_piece_hash_actv(self.side, Piece::Rook, Sq::D1);
+                    self.eval_add(eval::PSQT[ACTV][ROOK_IDX][Sq::D1.us()]);
                 }
                 if self.actv_castle_rights.kingside() {
                     self.hash ^= zobrist::get_hash_ks_castle(self.side);
@@ -243,40 +242,117 @@ impl Board {
         
         // update actv
         self.actv = self.actv & !from_bm | to_bm;
+
         // update hash & handle pawn promotions
-        if self.pawns & from_bm != 0 {
+        if self.pawns & from_bm != 0 && piece != Piece::Pawn {
             self.pawns &= !from_bm;
-            let prom_zhash = zobrist::get_piece_hash_actv(self.side, Piece::Pawn, from);
-            self.hash ^= prom_zhash;
-            self.pk_hash ^= prom_zhash;
+            self.hash ^= zobrist::get_piece_hash_actv(self.side, Piece::Pawn, from);
+            self.eval_sub(eval::PSQT[ACTV][PAWN_IDX][from.us()]);
+            self.phase -= eval::PHASE_ADJUST[PAWN_IDX];
+            self.phase += eval::PHASE_ADJUST[piece as usize];
         } else {
-            let from_zhash = zobrist::get_piece_hash_actv(self.side, piece, from);
-            self.hash ^= from_zhash;
-            if matches!(piece, Piece::Pawn | Piece::King) {
-                self.pk_hash ^= from_zhash;
-            }
+            self.hash ^= zobrist::get_piece_hash_actv(self.side, piece, from);
+            self.eval_sub(eval::PSQT[ACTV][piece as usize][from.us()]);
         }
-        let to_zhash = zobrist::get_piece_hash_actv(self.side, piece, to);
-        self.hash ^= to_zhash;
-        if matches!(piece, Piece::Pawn | Piece::King) {
-            self.pk_hash ^= to_zhash;
-        }
+        self.hash ^= zobrist::get_piece_hash_actv(self.side, piece, to);
+        self.eval_add(eval::PSQT[ACTV][piece as usize][to.us()]);
 
         // bookkeeping
         self.flip();
-        self.ply_number += 1;
+        self.total_ply_number += 1;
+
+        debug_assert!(self.validate().is_ok());
+    }
+
+    /// Calculate the hash for the position resulting from the move.
+    /// 
+    /// Note that legality is not checked.
+    pub fn make_hash(&self, Move { from, to, piece }: Move) -> u64 {
+        let mut hash = self.hash;
+
+        let from_bm = from.bm();
+        let to_bm = to.bm();
+        
+        // handle capture
+        if let Some(cap) = self.get_piece_at(to) {
+            hash ^= zobrist::get_piece_hash_idle(!self.side, cap, to);
+        } else {
+            // check for en passant before assuming no capture
+            if piece == Piece::Pawn && to_bm == self.en_passant {
+                hash ^= zobrist::get_piece_hash_idle(self.side, Piece::Pawn, Sq::lsb(to.bm() >> 0o10));
+            }
+        }
+        
+        if self.en_passant != 0 {
+            hash ^= zobrist::get_hash_en_passant(self.en_passant);
+        }
+
+        match piece {
+            Piece::Pawn => {
+                // double-advance: flag rear tile for en passant
+                if to_bm == from_bm << 16 {
+                    hash ^= zobrist::get_hash_en_passant(self.en_passant);
+                }
+            }
+            Piece::Rook => {
+                if from_bm == 0x1 {
+                    if self.actv_castle_rights.queenside() {
+                        hash ^= zobrist::get_hash_qs_castle(self.side);
+                    }
+                } else if from_bm == 0x80 {
+                    if self.actv_castle_rights.kingside() {
+                        hash ^= zobrist::get_hash_ks_castle(self.side);
+                    }
+                }
+            },
+            Piece::King => {
+                if from_bm == to_bm >> 2 { // kingside castle!
+                    hash ^= zobrist::get_piece_hash_actv(self.side, Piece::Rook, Sq::H1);
+                    hash ^= zobrist::get_piece_hash_actv(self.side, Piece::Rook, Sq::F1);
+                } else if from_bm == to_bm << 2 { // queenside castle!
+                    hash ^= zobrist::get_piece_hash_actv(self.side, Piece::Rook, Sq::A1);
+                    hash ^= zobrist::get_piece_hash_actv(self.side, Piece::Rook, Sq::D1);
+                }
+                if self.actv_castle_rights.kingside() {
+                    hash ^= zobrist::get_hash_ks_castle(self.side);
+                }
+                if self.actv_castle_rights.queenside() {
+                    hash ^= zobrist::get_hash_qs_castle(self.side);
+                }
+            }
+            _ => (),
+        }
+        
+        // update hash & handle pawn promotions
+        if self.pawns & from_bm != 0 {
+            hash ^= zobrist::get_piece_hash_actv(self.side, Piece::Pawn, from);
+        } else {
+            hash ^= zobrist::get_piece_hash_actv(self.side, piece, from);
+        }
+        hash ^= zobrist::get_piece_hash_actv(self.side, piece, to);
+
+        hash
     }
 
     /// Play a null move and flip the player turn.
+    #[inline]
+    pub fn clone_make_null(&self) -> Self {
+        let mut clone = self.clone();
+        clone.make_null();
+        clone
+    }
+    /// Play a null move and flip the player turn.
     pub fn make_null(&mut self) {
         self.flip();
-        self.ply_number += 1;
+        self.total_ply_number += 1;
         self.fifty_move_clock += 1;
-        
+
         if self.en_passant != 0 {
             self.hash ^= zobrist::get_hash_en_passant(self.en_passant);
             self.en_passant = 0;
         }
+        
+        debug_assert!(self.validate().is_ok());
     }
 
 
@@ -293,40 +369,31 @@ impl Board {
         })
     }
 
-    /// Check for fifty move rule and insufficient material.
-    /// 
-    /// Note: does not check threefold repetition.
-    pub fn is_draw(&self) -> Option<GameOver> {
-        // 50 move rule
-        if self.fifty_move_clock >= 100 {
-            return Some(GameOver::FiftyMoveRule);
-        }
-        
-        // insufficient material
+    pub fn is_draw_50_move(&self) -> bool {
+        self.fifty_move_clock >= 100
+    }
+
+    pub fn is_draw_insf_mtrl(&self) -> bool {
         if self.pawns | self.rooks | self.queens == 0 {
             let minors = self.knights | self.bishops;
             let actv_minor_thresh = (self.actv & minors).count_ones() <= 1;
             let idle_minor_thresh = (self.idle & minors).count_ones() <= 1;
             
-            if actv_minor_thresh && idle_minor_thresh {
-                // kx v kx, where x is a minor piece or nothing
-                return Some(GameOver::InsufficientMaterial);
-            } else if actv_minor_thresh || idle_minor_thresh {
-                if self.bishops == 0 && self.knights == 2 {
-                    // knn v k
-                    return Some(GameOver::InsufficientMaterial);
-                }
-            }
+            // kx v kx, where x is a minor piece or nothing
+            actv_minor_thresh && idle_minor_thresh || 
+            // knn v k
+            (actv_minor_thresh || idle_minor_thresh) && self.bishops == 0 && self.knights == 2
+        } else {
+            false
         }
-
-        None
     }
     
     /// Check if the game is over.
     /// 
     /// Note: does not check threefold repetition.
     pub fn is_game_over(&self) -> Option<GameOver> {
-        if let Some(r) = self.is_draw() { return Some(r) }
+        if self.is_draw_50_move() { return Some(GameOver::FiftyMoveRule) }
+        if self.is_draw_insf_mtrl() { return Some(GameOver::InsufficientMaterial) }
         self.is_mate()
     }
 
@@ -379,8 +446,8 @@ impl Board {
 
         // validate misc data as best as possible
         as_result!(self.hash == zobrist::compute_hash(&self))?;
-        as_result!(self.pk_hash == zobrist::compute_pk_hash(&self))?;
-        as_result!(self.fifty_move_clock <= self.ply_number)?;
+        as_result!((self.eval, self.phase) == eval::calc_eval_phase(self))?;
+        as_result!(self.fifty_move_clock <= self.total_ply_number)?;
 
         Ok(())
     }

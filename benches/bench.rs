@@ -5,6 +5,12 @@ use infra::{Board, Piece, Move, Sq, search::ord::MoveBuffer};
 fn bench_board_methods(c: &mut Criterion) {
     let fen = "r1bqkbnr/pppp2pp/2n5/1B2pp2/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4";
     let board = Board::from_fen(fen).unwrap();
+
+
+    c.bench_function("make_hash", |b| b.iter(|| {
+        board.make_hash(Move::new(Sq::F3, Sq::E5, Piece::Knight))
+    }));
+
     c.bench_function("for_move", |b| b.iter(|| {
         board.for_move(|mov| {
             let mut b = board.clone();

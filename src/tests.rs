@@ -9,10 +9,10 @@ use infra::epd::{self, Epd};
 
 #[allow(dead_code)]
 pub fn test_pos() {
-    let fen = "r4q1k/p2bR1rp/2p2Q1N/5p2/5p2/2P5/PP3PPP/R5K1 w - - ";
+    let fen = "2q1rr1k/3bbnnp/p2p1pp1/2pPp3/PpP1P1P1/1P2BNNP/2BQ1PRK/7R b - - ";
 
     let game = Game::new(Board::from_fen(fen).unwrap(), vec![]).unwrap();
-    let handle = game.search(TimeControl::Infinite, None, None);
+    let handle = game.search(TimeControl::Infinite);
     let _ = log_search_info(handle.info_channel.1, &game.position);
 }
 
@@ -97,7 +97,7 @@ fn epd_test(name: &str, epds: &str, time_control: TimeControl) {
 
     for epd in epd::parse_epd(epds.trim()) {
         let game = Game::new(epd.pos.clone(), vec![]).unwrap();
-        let handle = game.search(time_control, None, None);
+        let handle = game.search(time_control);
         let (infos, dur) = log_search_info(handle.info_channel.1, &epd.pos);
         let (status, acc) = epd_bm_am_assessment(name, &epd, infos, dur);
 

@@ -11,17 +11,18 @@ const BOOK_DIST: usize = 10;
 /// Out-of-book search bonus as a multiple of allocated time.
 const BOOK_BIAS: f64 = 1.8;
 /// Time bias towards searching longer now, rather than later.
-const MOVE_BIAS: f64 = 1.2;
+const MOVE_BIAS: f64 = 1.18;
 /// Time bias towards searching longer now, rather than later, 
 /// when book distance isn't avaialable.
-const MOVE_BIAS_NO_BOOK: f64 = 1.3;
+const MOVE_BIAS_NO_BOOK: f64 = 1.24;
 /// Maximum ratio of time used to time allocated.
 const MAX_TIME_RATIO: f64 = 3.0;
 /// Maximum fraction of remaining time used.
 const MAX_TIME_LEFT_RATIO: f64 = 0.4;
 /// Move count to assume remains when time control does not specify.
-const UNKNOWN_MOVES_LEFT: usize = 28;
-
+const UNKNOWN_MOVES_LEFT: f64 = 25.0;
+/// Padding moves onto number of moves left for time partitioning.
+const MOVES_LEFT_OFFSET: f64 = 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeControl {
@@ -46,7 +47,7 @@ impl TimeControl {
 
                 // if only one move is left, remaining is to be considered fixed allocated time
                 if let Some(left) = moves_left {
-                    if left == 1 { return AllocatedTime::Fixed(time_left) }
+                    if left == 0 { return AllocatedTime::Fixed(time_left) }
                 }
 
                 // bias towards using time sooner rather than later
@@ -60,7 +61,7 @@ impl TimeControl {
                 };
                 
                 // determine partition. allow for time extention/panic time
-                let part = moves_left.unwrap_or(UNKNOWN_MOVES_LEFT) as f64 + 0.25;
+                let part = moves_left.map_or(UNKNOWN_MOVES_LEFT, |ml| ml as f64 + MOVES_LEFT_OFFSET);
                 let time = time_left.mul_f64(bias).div_f64(part);
 
                 // establish a hard cutoff time
@@ -87,13 +88,11 @@ pub enum AllocatedTime {
     /// Search should try to minimize time spent while maximising strength.
     /// 
     /// * `time` is the allocated search duration, as a heuristic.
-    /// * `cutoff` is additional allowable search time, as a maximum.
+    /// * `cutoff` is the total allowable search time, as a maximum.
     Fancy { time: Duration, cutoff: Duration },
 }
 
 
-///// Minimum search time fraction before time-cutoffs are considered.
-//const MIN_SEARCH: f64 = 0.125;
 /// Maximum search time fraction after which time is cut off or extended.
 const MAX_SEARCH: f64 = 0.5;
 /// Search time cutoff for re-assess as ratio of allocated time.
@@ -104,7 +103,10 @@ const MIN_PANIC_EXT: f64 = 1.75;
 const PANIC_MIN_THRESH: i16 = 150;
 /// Maximum drop for full panic allocation.
 const PANIC_MAX_THRESH: i16 = 350;
-/// Difference between PV and second-best move lending itself to decisiveness.
+
+///// Minimum search time fraction before time-cutoffs are considered.
+//const MIN_SEARCH: f64 = 0.125;
+///// Difference between PV and second-best move lending itself to decisiveness.
 //const DECISIVE_PV_DIFF: i16 = 200;
 
 pub struct TimeManager {
@@ -127,9 +129,8 @@ pub struct TimeManager {
 }
 
 impl TimeManager {
-    pub fn start(allocated_time: Duration, maximum_time: Duration, _prev_move: Option<Move>) -> Self {
-        Self { 
-            //recapture: prev_move.map(|m| m.to),
+    pub fn start(allocated_time: Duration, maximum_time: Duration) -> Self {
+        Self {
             allocated_time,
             maximum_time,
 
@@ -238,32 +239,5 @@ impl TimeManager {
         } */
 
         Some(self.allocated_time.mul_f64(SEARCH_OVERSHOOT))
-    }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    pub fn test_allocate_time() {
-        let inf = TimeControl::Infinite;
-        assert_eq!(inf.allocate_time(None), AllocatedTime::Forever);
-
-        let mt = TimeControl::MoveTime(Duration::from_secs_f64(1.5));
-        assert_eq!(mt.allocate_time(None), AllocatedTime::Fixed(Duration::from_secs_f64(1.5)));
-
-        let mut moves_left = 40;
-        let mut time_left = Duration::from_secs_f64(400.0);
-        while moves_left > 0 {
-            let allcd = TimeControl::TimeLeft { time_left, increment: None, moves_left: Some(moves_left) }.allocate_time(Some(40 - moves_left));
-            eprintln!("{:?}", allcd);
-            moves_left -= 1;
-            if let AllocatedTime::Fancy { time, cutoff: _ } = allcd {
-                time_left -= time;
-            }
-        }
-        //panic!();
     }
 }
