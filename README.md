@@ -1,6 +1,6 @@
 # Infrared Chess Engine v2
 
-A UCI-compatible, 64-bit, open source chess engine. Written in Rust by Shaun Beautement. 
+A UCI-compatible open source chess engine. Written in Rust by Shaun Beautement. 
 
 ### Playing Strength
 TBD (maybe ~2400 ELO on CCRL?)
