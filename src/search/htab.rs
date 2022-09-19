@@ -61,7 +61,7 @@ impl<T: HashTableData> HashTable<T> {
         Self::with_capacity(capacity)
     }
 
-    /// Returns a `Self` with the specified capacity to the previous prime.
+    /// Returns a `Self` with the specified capacity to the previous power of two.
     pub fn with_capacity(mut capacity: usize) -> Self {
         capacity = (capacity / 2).next_power_of_two();
 

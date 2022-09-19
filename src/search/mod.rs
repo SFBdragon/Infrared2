@@ -86,13 +86,15 @@ pub fn search(
     info_sndr: Sender<(SearchInfo, bool)>, 
     kill_switch: Arc<AtomicBool>,
     allocated_time: AllocatedTime,
+    hash_size_mb: usize,
+    thread_count: usize,
 ) {
     
     // ---- SETUP ---- //
     
     // A new tranposition table is used for each search due to
     // repetition and 50 move rule errors due to outdated hash-scores
-    let trans_table = Arc::new(htab::TransTable::with_memory(htab::TRANS_MEM_DEFAULT));
+    let trans_table = Arc::new(htab::TransTable::with_memory(hash_size_mb * 1024 * 1024));
 
     //
     let mut root_moves = Vec::new();
@@ -143,7 +145,7 @@ pub fn search(
         let mut helper_threads = Vec::new();
 
         // search helper threads
-        for _ in 1..thread::available_parallelism().map_or(1, |x| x.get()) {
+        for _ in 1..thread_count.max(1) {
             let mut helper_moves = root_moves.clone();
             let board = board.clone();
             let helper_ks = helper_kill_switch.clone();
@@ -344,6 +346,8 @@ fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mu
         check_ext = true;
         data.check_exts += 1;
     }
+
+    //let pos_eval = board.eval();
     
     // null move pruning
     if draft > 3 && !in_check && board.actv & !board.pawns & !board.actv_king.bm() != 0 {
@@ -354,12 +358,18 @@ fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mu
         }
     }
 
+    // futility pruning prerequisites
+    let futility = draft == 1 && alpha > board.eval() + 250 && !in_check && (alpha <= 30000 || alpha >= -30000);
+
     // alpha-beta search
     let mut best: Option<(i16, Move)> = None;
-    let search = |mv: Move, board: &Board, data: &mut SearchData| -> bool {
+    let search = |mv: Move, board: &Board, data: &mut SearchData, is_boring: bool| -> bool {
         let board = board.clone_make(mv);
-        let mut score;
 
+        // check if futility pruning can be applied
+        if futility && best.is_some() && is_boring && !board.in_check() { return false; }
+
+        let mut score;
         if data.is_rep(board.hash) || board.is_draw_50_move() || board.is_draw_insf_mtrl() {
             score = eval::DRAW;
         } else {
@@ -371,7 +381,6 @@ fn pvs(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: &mu
             } else {
                 score = -pvs(&board, -alpha-1, -alpha, child_draft, depth + 1, data, Some(mv));
                 if alpha <= score && score < beta {
-                    // test: reset depth reduct?
                     score = -pvs(&board, -beta, -alpha, child_draft, depth + 1, data, Some(mv));
                 }
             }
@@ -447,10 +456,16 @@ fn quesce(board: &Board, mut alpha: i16, beta: i16, draft: i8, depth: u8, data: 
     let in_check = board.in_check();
     let mut max = -i16::MAX;
 
-    if !in_check { // no stand pat in check
-        max = board.eval(); // stand pat
+    if !in_check { // no pruning in check
+        // stand pat
+        max = board.eval(); 
         if max >= beta { return max; }
         if max > alpha { alpha = max; }
+
+        // delta pruning
+        let mut big_delta = 900;
+        if board.pawns & board.actv & 0x00FF000000000000 != 0 { big_delta += 900; }
+        if alpha > big_delta + max { return max; }
     }
 
     let mut quiet_position = true;

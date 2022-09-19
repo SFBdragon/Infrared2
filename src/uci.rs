@@ -3,7 +3,7 @@ use crossbeam_channel::{Sender, Receiver};
 use vampirc_uci::{
     UciMessage, UciMove, UciPiece, UciSquare, 
     UciInfoAttribute, UciFen, UciTimeControl,
-    CommunicationDirection,
+    CommunicationDirection, UciOptionConfig,
 };
 
 use infra::{
@@ -35,6 +35,11 @@ pub fn uci() {
     // UCI requires that the position be recalled across messages
     let mut position: Option<Game> = None;
 
+    // UCI configurable values
+    let mut use_own_book = true;
+    let mut online_syzygy_limit = 7;
+    let mut hash_size_mb = 256;
+    let mut thread_count = std::thread::available_parallelism().map_or(1, |nzu| nzu.get());
 
     // Stdin thread should block upon receiving lots of input
     let (stdin_sndr, stdin_rcvr) = crossbeam_channel::bounded::<String>(0);
@@ -83,6 +88,37 @@ pub fn uci() {
                         UciMessage::Register { later: _, name: _, code: _ } => {
                             uci_register()
                         }
+                        UciMessage::SetOption { name, value } => {
+                            /* let mut f = std::fs::File::open("/home/sfbea/debugg").unwrap_or(std::fs::File::create("/home/sfbea/debugg").unwrap());
+                            writeln!(f, "{} {:?}", name, value).unwrap(); */
+                            match name.as_str().trim() {
+                                "OwnBook" => {
+                                    match value.and_then(|v| v.parse::<bool>().ok()) {
+                                        Some(v) => use_own_book = v,
+                                        None => print!("Invalid setoption OwnBook command?"),
+                                    }
+                                }
+                                "Hash" => {
+                                    match value.and_then(|v| v.parse::<usize>().ok()) {
+                                        Some(v) => hash_size_mb = v,
+                                        None => print!("Invalid setoption Hash command?"),
+                                    }
+                                }
+                                "OnlineSyzygyMen" => {
+                                    match value.and_then(|v| v.parse::<usize>().ok()) {
+                                        Some(v) => online_syzygy_limit = v,
+                                        None => print!("Invalid setoption OnlineSyzygyMen command?"),
+                                    }
+                                }
+                                "ThreadCount" => {
+                                    match value.and_then(|v| v.parse::<usize>().ok()) {
+                                        Some(v) => thread_count = v,
+                                        None => print!("Invalid setoption ThreadCount command?"),
+                                    }
+                                }
+                                _ => print!("Invalid setoption command?\n")
+                            }
+                        }
                         UciMessage::UciNewGame => {
                             if let Some(sc) = std::mem::replace(&mut search_control, None) {
                                 sc.search_handle.kill_switch.store(true, Ordering::SeqCst);
@@ -97,39 +133,42 @@ pub fn uci() {
                             search_control = None;
 
                             if let Some(game) = &position {
-                                // syzygy query thread (auto checks piece count)
                                 let syzygy_board = game.position.clone();
                                 let (syzygy_sndr, syzygy_rcvr) = crossbeam_channel::bounded(1);
-                                thread::spawn(move || {
-                                    let syzygy_board = syzygy_board;
-                                    infra::syzygy::uci_syzygy_query(
-                                        &syzygy_board,
-                                        syzygy_sndr,
-                                    );
-                                });
-    
-                                if let Some(mov) = opening::query_book_best(game.position.hash) {
-                                    // opening book!
-                                    print!("{}\n", UciMessage::BestMove {
-                                        best_move: to_uci_move(&game.position, mov),
-                                        ponder: None,
-                                    }.to_string());
-                                    std::io::stdout().flush().expect("stdout flush error");
-                                } else {
-                                    let time_control = if let Some(tc) = time_control {
-                                        to_uci_time_control(tc, game.position.side)
-                                    } else {
-                                        TimeControl::Infinite
-                                    };
 
-                                    // search!
-                                    let search_handle = game.search(time_control);
-
-                                    search_control = Some(SearchControl {
-                                        search_handle,
-                                        syzygy_rcvr,
+                                if online_syzygy_limit >= syzygy_board.all.count_ones() as usize {
+                                    // syzygy query thread
+                                    thread::spawn(move || {
+                                        let syzygy_board = syzygy_board;
+                                        infra::syzygy::uci_syzygy_query(&syzygy_board, syzygy_sndr);
                                     });
                                 }
+
+                                if use_own_book {
+                                    if let Some(mov) = opening::query_book_weighted(game.position.hash) {
+                                        // opening book!
+                                        print!("{}\n", UciMessage::BestMove {
+                                            best_move: to_uci_move(&game.position, mov),
+                                            ponder: None,
+                                        }.to_string());
+                                        std::io::stdout().flush().expect("stdout flush error");
+                                    }
+                                }
+
+                                // perform engine search
+                                let time_control = match time_control {
+                                    Some(tc) => from_uci_time_control(tc, game.position.side),
+                                    None => TimeControl::Infinite,
+                                };
+
+                                // search!
+                                println!("tc: {}", thread_count);
+                                let search_handle = game.search(time_control, hash_size_mb, Some(thread_count));
+
+                                search_control = Some(SearchControl {
+                                    search_handle,
+                                    syzygy_rcvr,
+                                });
                             }
                         }
                         UciMessage::Stop => {
@@ -143,7 +182,6 @@ pub fn uci() {
                             }
                             break 'event;
                         }
-                        UciMessage::SetOption { name: _, value: _ } => (),
                         UciMessage::PonderHit => (),
                         UciMessage::Debug(_) => (),
                         UciMessage::Unknown(_, _) => {
@@ -172,12 +210,28 @@ fn uci_init() {
     });
 
     // define options
-    /* print!("{}", UciMessage::Option(UciOptionConfig::Spin {
+    print!("{}\n", UciMessage::Option(UciOptionConfig::Check {
+        name: "OwnBook".to_owned(),
+        default: Some(true),
+    }));
+    print!("{}\n", UciMessage::Option(UciOptionConfig::Spin {
         name: "Hash".to_owned(),
-        default: Some(1024),
+        default: Some(256),
+        min: Some(1),
+        max: Some(2048),
+    }));
+    print!("{}\n", UciMessage::Option(UciOptionConfig::Spin {
+        name: "ThreadCount".to_owned(),
+        default: Some(std::thread::available_parallelism().map_or(1, |nzu| nzu.get() as i64).min(16)),
+        min: Some(1),
+        max: Some(16),
+    }));
+    print!("{}\n", UciMessage::Option(UciOptionConfig::Spin {
+        name: "OnlineSyzygyMen".to_owned(),
+        default: Some(7),
         min: Some(0),
-        max: None,
-    })); */
+        max: Some(7),
+    }));
 
     // uciok
     print!("{}\n", UciMessage::UciOk.to_string());
@@ -224,6 +278,7 @@ fn uci_search_info(position: &Board, info: SearchInfo, is_final: bool) {
             ponder: None
         });
         std::io::stdout().flush().expect("stdout flush error");
+        return;
     }
 
     // send info message
@@ -281,7 +336,7 @@ fn from_uci_move(board: &Board, mov: UciMove) -> Option<Move> {
     }
 }
 
-fn to_uci_time_control(time_control: UciTimeControl, side: Side) -> TimeControl {
+fn from_uci_time_control(time_control: UciTimeControl, side: Side) -> TimeControl {
     match time_control {
         UciTimeControl::Ponder => panic!("ponder request?"),
         UciTimeControl::Infinite => TimeControl::Infinite,

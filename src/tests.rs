@@ -12,7 +12,7 @@ pub fn test_pos() {
     let fen = "2q1rr1k/3bbnnp/p2p1pp1/2pPp3/PpP1P1P1/1P2BNNP/2BQ1PRK/7R b - - ";
 
     let game = Game::new(Board::from_fen(fen).unwrap(), vec![]).unwrap();
-    let handle = game.search(TimeControl::Infinite);
+    let handle = game.search(TimeControl::Infinite, 256, None);
     let _ = log_search_info(handle.info_channel.1, &game.position);
 }
 
@@ -97,7 +97,7 @@ fn epd_test(name: &str, epds: &str, time_control: TimeControl) {
 
     for epd in epd::parse_epd(epds.trim()) {
         let game = Game::new(epd.pos.clone(), vec![]).unwrap();
-        let handle = game.search(time_control);
+        let handle = game.search(time_control, 256, None);
         let (infos, dur) = log_search_info(handle.info_channel.1, &epd.pos);
         let (status, acc) = epd_bm_am_assessment(name, &epd, infos, dur);
 

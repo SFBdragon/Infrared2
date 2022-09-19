@@ -31,6 +31,12 @@ impl Board {
     
         return eval as i16;
     }
+
+    pub fn piece_mtrl(&self, piece: crate::Piece) -> i16 {
+        let mg = pesto::MTRL[MG][piece as usize] *       self.phase as i16;
+        let eg = pesto::MTRL[EG][piece as usize] * (24 - self.phase as i16);
+        (mg + eg) / 24
+    }
 }
 
 pub fn calc_eval_phase(pos: &Board) -> ([i16; 2], u8) {

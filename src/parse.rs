@@ -74,7 +74,7 @@ impl Move {
         let san = san.trim_end().trim_end_matches("e.p.").trim();
     
         // detect castle case
-        match san {
+        match san.trim_start_matches(&['+', '#']) {
             "O-O" => return board.is_valid(Move::KS_CASTLE).then_some(Move::KS_CASTLE),
             "O-O-O" => return board.is_valid(Move::QS_CASTLE).then_some(Move::QS_CASTLE),
             _ => (),
@@ -166,36 +166,41 @@ impl Move {
     /// ### Panics:
     /// Panics if `board` and `piece` are contradictory.
     pub fn to_lan(self, board: &Board) -> String {
-        if self == Move::KS_CASTLE { return "O-O".to_owned(); }
-        if self == Move::QS_CASTLE { return "O-O-O".to_owned(); }
+        let mut san = if self == Move::KS_CASTLE {
+            "O-O".to_owned()
+        } else if self == Move::QS_CASTLE {
+            "O-O-O".to_owned()
+        } else {
+            let mut san = String::with_capacity(5);
+    
+            assert!(board.actv & self.from.bm() != 0);
+            let board_piece = board.get_piece_at(self.from).unwrap();
+    
+            // piece id
+            match board_piece.to_char() {
+                'P' => (), // pawn id is usually suppressed
+                ch  => san.push(ch),
+            }
+    
+            // from square (not supressed in LAN)
+            san.push_str(self.from.cflip(board.side).to_alg().as_str());
+    
+            // capture
+            if board.idle & self.to.bm() != 0 { san.push('x'); }
+    
+            // to square
+            san.push_str(self.to.cflip(board.side).to_alg().as_str());
+    
+            // promotion
+            if board_piece != self.piece {
+                assert!(board_piece == Piece::Pawn && 0xFF000000000000 & self.from.bm() != 0);
+                
+                san.push('=');
+                san.push(self.piece.to_char());
+            }
 
-        let mut san = String::with_capacity(5);
-
-        assert!(board.actv & self.from.bm() != 0);
-        let board_piece = board.get_piece_at(self.from).unwrap();
-
-        // piece id
-        match board_piece.to_char() {
-            'P' => (), // pawn id is usually suppressed
-            ch  => san.push(ch),
-        }
-
-        // from square (not supressed in LAN)
-        san.push_str(self.from.cflip(board.side).to_alg().as_str());
-
-        // capture
-        if board.idle & self.to.bm() != 0 { san.push('x'); }
-
-        // to square
-        san.push_str(self.to.cflip(board.side).to_alg().as_str());
-
-        // promotion
-        if board_piece != self.piece {
-            assert!(board_piece == Piece::Pawn && 0xFF000000000000 & self.from.bm() != 0);
-            
-            san.push('=');
-            san.push(self.piece.to_char());
-        }
+            san
+        };
 
         // check & mate
         let mut b = board.clone();

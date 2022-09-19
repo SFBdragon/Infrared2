@@ -77,6 +77,14 @@ pub fn query_book(hash: u64) -> Option<&'static [OpeningEntry]> {
 pub fn query_book_best(hash: u64) -> Option<Move> {
     query_book(hash).map(|q| q.iter().max_by_key(|e| e.freq).unwrap().mv)
 }
+pub fn query_book_weighted(hash: u64) -> Option<Move> {
+    query_book(hash).map(|q| {
+        let total = q.iter().fold(0, |i, e| i + e.freq);
+        let v = fastrand::u32(0..total);
+        let mut accu = 0;
+        q.iter().find_map(|&e| { accu += e.freq; (accu > v).then_some(e.mv) }).unwrap()
+    })
+}
 
 
 #[cfg(test)]

@@ -116,13 +116,14 @@ impl Game {
     }
 
 
-    pub fn search(&self, time_control: TimeControl) -> SearchHandle {
+    pub fn search(&self, time_control: TimeControl, hash_size_mb: usize, thread_count: Option<usize>) -> SearchHandle {
         let kill_switch = Arc::new(AtomicBool::new(false));
         let (sndr, rcvr) = crossbeam_channel::unbounded();
 
         let thread_game = self.clone();
         let thread_kill_switch = kill_switch.clone();
         let thread_sndr = sndr.clone();
+        let thread_count = thread_count.unwrap_or(std::thread::available_parallelism().map_or(1, |nzu| nzu.get()));
 
         let thread_handle = std::thread::spawn(move || {
             search::search(
@@ -131,6 +132,8 @@ impl Game {
                 thread_sndr,
                 thread_kill_switch,
                 time_control.allocate_time(thread_game.book_distance),
+                hash_size_mb,
+                thread_count,
             )
         });
 

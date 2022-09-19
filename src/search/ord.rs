@@ -79,14 +79,14 @@ const fn mvv_lva(board: &Board) -> [(u64, Piece, fn(Sq, u64) -> u64); 5] {
 }
 
 pub(super) fn ord<'d, 'b, F>(mut f: F, board: &'b Board, depth: u8, data: &'d mut SearchData, pv: Option<Move>, prev: Option<Move>, full: bool)
-where F: FnMut(Move, &Board, &mut SearchData) -> bool {
+where F: FnMut(Move, &Board, &mut SearchData, bool) -> bool {
 
     // Map of prior issued moves: from-to butterfly
     let mut bfly = Bufferfly::new();
 
     // PV move
     if let Some(pv) = pv {
-        if f(pv, board, data) { return; }
+        if f(pv, board, data, false) { return; }
         bfly.set(pv);
     }
 
@@ -100,7 +100,7 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
                 let (lvas, p, fend_fn) = mvv_lva[lva];
                 for_sq!(asq in fend_fn(idle, board.all) & lvas & board.actv => {
                     let mv = Move::new(asq, idle, p);
-                    if bfly.is_novel(mv) && board.is_legal(mv) && f(mv, board, data) { return; }
+                    if bfly.is_novel(mv) && board.is_legal(mv) && f(mv, board, data, false) { return; }
                 });
             }
         }
@@ -110,14 +110,14 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
     let mut mvbf = MoveBuffer::new();
     board.gen_proms(&mut mvbf);
     for &mut mv in mvbf.as_mut_slice() {
-        if bfly.is_novel(mv) && board.is_legal(mv) && f(mv, board, data) { return; }
+        if bfly.is_novel(mv) && board.is_legal(mv) && f(mv, board, data, false) { return; }
     }
     mvbf.clear();
 
     // pawn captures
     board.pawn_caps(&mut mvbf);
     for &mut mv in mvbf.as_mut_slice() {
-        if bfly.is_novel(mv) && board.is_legal(mv) && f(mv, board, data) { return; }
+        if bfly.is_novel(mv) && board.is_legal(mv) && f(mv, board, data, false) { return; }
     }
     mvbf.clear();
 
@@ -129,7 +129,7 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
                 let (lvas, p, fend_fn) = mvv_lva[lva];
                 for_sq!(asq in fend_fn(vsq, board.all) & lvas & board.actv => {
                     let mv = Move::new(asq, vsq, p);
-                    if bfly.is_novel(mv) && board.is_legal(mv) && f(mv, board, data) { return; }
+                    if bfly.is_novel(mv) && board.is_legal(mv) && f(mv, board, data, false) { return; }
                 });
             }
         });
@@ -140,7 +140,7 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
         if let Some(km) = km {
             if !bfly.get(km) {
                 if board.is_valid(km) {
-                    if f(km, board, data) { return; }
+                    if f(km, board, data, false) { return; }
                     bfly.set(km);
                 }
             }
@@ -155,7 +155,7 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
                 let (lvas, p, fend_fn) = mvv_lva[lva];
                 for_sq!(asq in fend_fn(vsq, board.all) & lvas & board.actv => {
                     let mv = Move::new(asq, vsq, p);
-                    if bfly.is_novel(mv) && board.is_legal(mv) && f(mv, board, data) { return; }
+                    if bfly.is_novel(mv) && board.is_legal(mv) && f(mv, board, data, false) { return; }
                 });
             }
         });
@@ -163,7 +163,7 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
 
     if !full {
         // remaining moves, generated on demand and unordered
-        board.for_move(|mv| !bfly.get(mv) && f(mv, board, data));
+        board.for_move(|mv| !bfly.get(mv) && f(mv, board, data, true));
     } else {
         // remaining moves, generated in bulk and ordered lazily
 
@@ -188,7 +188,7 @@ where F: FnMut(Move, &Board, &mut SearchData) -> bool {
             }
             let mv = move_buff[min];
             move_buff[min] = move_buff[i];
-            if !bfly.get(mv) && board.is_legal(mv) && f(mv, board, data) { return; }
+            if !bfly.get(mv) && board.is_legal(mv) && f(mv, board, data, true) { return; }
         }
     }
 }
