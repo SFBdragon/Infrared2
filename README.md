@@ -6,7 +6,7 @@ A UCI-compatible open source chess engine. Written in Rust by Shaun Beautement.
 TBD (maybe ~2400 ELO on CCRL?)
 
 ### Usage
-1. Install a Chess GUI such as [Cute Chess](https://cutechess.com/).
+1. Install a Chess GUI such as [Cute Chess](https://cutechess.com/) (Windows installer can be downloaded [here](https://github.com/cutechess/cutechess/releases/download/1.2.0/cutechess_setup.exe)).
 2. Download and unzip the appropriate version for your operating system under [Releases](https://github.com/SFBdragon/Infrared2/releases).
 3. Configure the engine (for Cute Chess, navigate to Tools -> Settings -> Engines (tab) -> + -> locate engine executable).
 4. Play against it! (for Cute Chess, Game -> New -> set a player to CPU -> select your configuration for Infrared 2).
