@@ -63,7 +63,7 @@ impl<T: HashTableData> HashTable<T> {
 
     /// Returns a `Self` with the specified capacity to the previous power of two.
     pub fn with_capacity(mut capacity: usize) -> Self {
-        capacity = (capacity / 2).next_power_of_two();
+        capacity = (capacity / 2 + 1).next_power_of_two();
 
         let mut data = Vec::with_capacity(capacity);
         for _ in 0..capacity { 
