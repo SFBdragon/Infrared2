@@ -96,7 +96,7 @@ pub fn search(
     // repetition and 50 move rule errors due to outdated hash-scores
     let trans_table = Arc::new(htab::TransTable::with_memory(hash_size_mb * 1024 * 1024));
 
-    //
+    // generate available moves
     let mut root_moves = Vec::new();
     board.for_move(|mv| { root_moves.push(mv); false });
     assert_ne!(root_moves.len(), 0);

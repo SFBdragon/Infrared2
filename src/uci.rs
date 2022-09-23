@@ -14,7 +14,7 @@ use infra::{
 
 struct SearchControl {
     search_handle: SearchHandle,
-    syzygy_rcvr: Receiver<SearchInfo>,
+    syzygy_rcvr: Option<Receiver<SearchInfo>>,
 }
 
 
@@ -53,7 +53,9 @@ pub fn uci() {
         let mut syzygy_info_index = None;
         if let Some(sc) = search_control.as_ref() {
             search_info_index = Some(selector.recv(&sc.search_handle.info_channel.1));
-            syzygy_info_index = Some(selector.recv(&sc.syzygy_rcvr));
+            if let Some(sr) = sc.syzygy_rcvr.as_ref() {
+                syzygy_info_index = Some(selector.recv(sr));
+            }
         }
         let operation_index = selector.ready();
 
@@ -68,7 +70,7 @@ pub fn uci() {
             }
         } else if syzygy_info_index.is_some() && operation_index == syzygy_info_index.unwrap() {
             let search_control_ref = search_control.as_ref().unwrap();
-            if let Ok(info) = search_control_ref.syzygy_rcvr.try_recv() {
+            if let Some(info) = search_control_ref.syzygy_rcvr.as_ref().and_then(|sr| sr.try_recv().ok()) {
                 uci_search_info(&position.as_ref().unwrap().position, info, true);
                 search_control_ref.search_handle.kill_switch.store(true, Ordering::SeqCst);
                 search_control = None;
@@ -89,8 +91,6 @@ pub fn uci() {
                             uci_register()
                         }
                         UciMessage::SetOption { name, value } => {
-                            /* let mut f = std::fs::File::open("/home/sfbea/debugg").unwrap_or(std::fs::File::create("/home/sfbea/debugg").unwrap());
-                            writeln!(f, "{} {:?}", name, value).unwrap(); */
                             match name.as_str().trim() {
                                 "OwnBook" => {
                                     match value.and_then(|v| v.parse::<bool>().ok()) {
@@ -133,15 +133,19 @@ pub fn uci() {
                             search_control = None;
 
                             if let Some(game) = &position {
-                                let syzygy_board = game.position.clone();
-                                let (syzygy_sndr, syzygy_rcvr) = crossbeam_channel::bounded(1);
+                                let mut syzygy_rcvr = None;
+                                
+                                if online_syzygy_limit >= game.position.all.count_ones() as usize {
+                                    let syzygy_board = game.position.clone();
+                                    let (sndr, rcvr) = crossbeam_channel::bounded(1);
 
-                                if online_syzygy_limit >= syzygy_board.all.count_ones() as usize {
                                     // syzygy query thread
                                     thread::spawn(move || {
                                         let syzygy_board = syzygy_board;
-                                        infra::syzygy::uci_syzygy_query(&syzygy_board, syzygy_sndr);
+                                        infra::syzygy::uci_syzygy_query(&syzygy_board, sndr);
                                     });
+
+                                    syzygy_rcvr = Some(rcvr);
                                 }
 
                                 if use_own_book {
@@ -162,7 +166,6 @@ pub fn uci() {
                                 };
 
                                 // search!
-                                println!("tc: {}", thread_count);
                                 let search_handle = game.search(time_control, hash_size_mb, Some(thread_count));
 
                                 search_control = Some(SearchControl {
