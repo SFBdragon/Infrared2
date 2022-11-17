@@ -3,7 +3,7 @@
 A UCI-compatible open source chess engine. Written in Rust by Shaun Beautement. 
 
 ### Playing Strength
-TBD (maybe ~2400 ELO on CCRL?)
+TBD (maybe ~2200 ELO on CCRL?)
 
 ### Usage
 1. Install a Chess GUI such as [Cute Chess](https://cutechess.com/) (Windows installer can be downloaded [here](https://github.com/cutechess/cutechess/releases/download/1.2.0/cutechess_setup.exe)).
