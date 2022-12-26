@@ -3,7 +3,7 @@
 A UCI-compatible open source chess engine. Written in Rust by Shaun Beautement. 
 
 ### Playing Strength
-2193 +/−30 ELO on CCRL after 400 games, i.e. almost master level, although CCRL and FIDE ratings aren't directly comparable.
+[2193 +/−30 ELO on CCRL](https://www.computerchess.org.uk/ccrl/4040/cgi/engine_details.cgi?print=Details&match_length=30&eng=Infrared+2.0.2+64-bit) after 400 games, i.e. almost master level, although CCRL and FIDE ratings aren't directly comparable.
 
 ### Usage
 1. Install a Chess GUI such as [Cute Chess](https://cutechess.com/) (Windows installer can be downloaded [here](https://github.com/cutechess/cutechess/releases/download/1.2.0/cutechess_setup.exe)).
