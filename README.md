@@ -12,7 +12,9 @@ A UCI-compatible open source chess engine. Written in Rust by Shaun Beautement.
 4. Play against it! (for Cute Chess, Game -> New -> set a player to CPU -> select your configuration for Infrared 2).
 
 ### Platforms
-Builds are available for Linux and Windows 64-bit under [Releases](https://github.com/SFBdragon/Infrared2/releases), but other targets should be easily compiled for by downloading the source, setting up a rust toolchain for your machine and invoking `cargo build --release`, and optionally including the `openings.dat` file alongside the executable.
+Builds are available for Linux and Windows 64-bit under [Releases](https://github.com/SFBdragon/Infrared2/releases), but other targets can be compiled for by downloading the source, installing `cargo` (and a Rust toolchain for your system, e.g. with [Rustup](https://www.rust-lang.org/tools/install)) for your machine and then invoking `cargo run --release` in the directory of the dowload of this repository. 
+
+(If this is too confusing, please email me!)
 
 ### Configuration
 The engine is by default configured to:
